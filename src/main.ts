@@ -142,6 +142,13 @@ async function bootstrap(): Promise<void> {
           durationMs: 1500,
         });
       },
+      onLeashCreature: (targetPos) => {
+        creature.tieLeashTo(targetPos, playerVillage, rivalVillage);
+      },
+      onUnleashCreature: () => {
+        creature.unleash();
+      },
+      getCreaturePos: () => creature.position.clone(),
     }
   );
 
@@ -241,7 +248,23 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 3. Grabbing the Player Village Totem to dial worship
+    // 3. Holding the Creature Leash in VR
+    if (creature.leashHeldByHand === side) {
+      if (isGrasping) {
+        creature.updateHeldLeash(hand.pinchWorldPos);
+        return true;
+      } else {
+        // Release on Creature itself -> unleash; release anywhere else -> tie leash there!
+        if (hand.pinchWorldPos.distanceTo(creature.interactionCenter) < 4.5) {
+          creature.unleash();
+        } else {
+          creature.tieLeashTo(hand.pinchWorldPos, playerVillage, rivalVillage);
+        }
+        return false;
+      }
+    }
+
+    // 4. Grabbing the Player Village Totem to dial worship
     if (grabbingTotem[side]) {
       if (isGrasping) {
         playerVillage.adjustTotemByWorldY(hand.pinchWorldPos.y);
@@ -251,7 +274,7 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 4. Holding a Physics Prop
+    // 5. Holding a Physics Prop
     const held = heldProps[side];
     if (held) {
       if (isGrasping) {
@@ -264,8 +287,13 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 5. Starting a new grab (Totem first, then Physics Prop)
+    // 6. Starting a new grab (Creature Leash -> Totem -> Physics Prop)
     if (isGrasping && !wasGrasping) {
+      if (hand.pinchWorldPos.distanceTo(creature.collarWorldPos) < grabRadius + 2.8) {
+        creature.grabLeash(side, hand.pinchWorldPos);
+        return true;
+      }
+
       const totemCenter = playerVillage.totemPos.clone().add(new THREE.Vector3(0, 2.5, 0));
       if (hand.pinchWorldPos.distanceTo(totemCenter) < grabRadius + 1.5) {
         grabbingTotem[side] = true;

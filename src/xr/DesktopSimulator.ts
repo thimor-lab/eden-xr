@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MiracleType } from '../core/EventBus';
 import { PhysicsProp, PhysicsWorld } from '../physics/PhysicsWorld';
 import { Village } from '../villages/Village';
-import { IslandTerrain, PLAYER_VILLAGE_POS } from '../world/IslandTerrain';
+import { IslandTerrain, PLAYER_VILLAGE_POS, RIVAL_VILLAGE_POS } from '../world/IslandTerrain';
 import { GestureRecognizer } from './GestureRecognizer';
 
 export interface DesktopCallbacks {
@@ -10,11 +10,19 @@ export interface DesktopCallbacks {
   onPetCreature: () => void;
   onSlapCreature: () => void;
   onToggleTotem: () => void;
+  onLeashCreature: (targetPos: THREE.Vector3) => void;
+  onUnleashCreature: () => void;
+  getCreaturePos: () => THREE.Vector3;
 }
 
 /**
- * Mouse + Keyboard God-Hand simulator for desktop testing & verification
- * when not inside an Android XR headset.
+ * Free-roaming Black & White style Mouse + Keyboard God-Hand simulator:
+ * - Left-drag empty terrain: Pull/pan smoothly across the entire island!
+ * - Left-drag rock/tree/wood/food: Grab & throw!
+ * - Right-drag (or Q/E): Smooth 360° orbit & tilt!
+ * - WASD / Arrows (+ Shift boost): Smooth zoom-scaled panning!
+ * - Scroll wheel: Smooth exponential zoom (close-up to full-island god view)!
+ * - L: Tie Creature Leash to cursor · U: Unleash · C: Focus Creature · H: Home · R: Rival
  */
 export class DesktopSimulator {
   private readonly raycaster = new THREE.Raycaster();
@@ -22,12 +30,19 @@ export class DesktopSimulator {
   private readonly keys = new Set<string>();
 
   private yaw = 0.25;
+  private targetYaw = 0.25;
   private pitch = -0.58;
-  private distance = 34;
-  private focus = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 2, 5, PLAYER_VILLAGE_POS.z);
+  private targetPitch = -0.58;
+  private distance = 36;
+  private targetDistance = 36;
+  private focus = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 2, 5, PLAYER_VILLAGE_POS.z + 2);
+  private targetFocus = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 2, 5, PLAYER_VILLAGE_POS.z + 2);
 
   private orbiting = false;
+  private panningGround = false;
+  private panAnchorWorld = new THREE.Vector3();
   private lastMouse = new THREE.Vector2();
+
   private grabbedProp: PhysicsProp | null = null;
   private lastGrabWorld = new THREE.Vector3();
   private throwVelocity = new THREE.Vector3();
@@ -55,27 +70,33 @@ export class DesktopSimulator {
       this.updatePointer(e);
       this.lastMouse.set(e.clientX, e.clientY);
 
-      if (e.button === 2) {
+      if (e.button === 2 || e.button === 1) {
         this.orbiting = true;
         return;
       }
 
+      const hit = this.raycastGround();
+      this.cursorWorldPos.copy(hit);
+
       if (this.keys.has('KeyG')) {
         this.drawingGesture = true;
-        const hit = this.raycastTerrain();
         this.gestureRecognizer.beginStroke(hit.clone().add(new THREE.Vector3(0, 4, 0)));
         return;
       }
 
       // Check if clicking near a grabbable physics prop
-      const hit = this.raycastTerrain();
-      const nearest = this.physics.findNearestGrabbable(hit, 3.6);
+      const nearest = this.physics.findNearestGrabbable(hit, 3.2);
       if (nearest) {
         this.grabbedProp = nearest;
         this.physics.grabProp(nearest, 'desktop');
         this.lastGrabWorld.copy(hit).add(new THREE.Vector3(0, 3.5, 0));
         this.throwVelocity.set(0, 0, 0);
+        return;
       }
+
+      // Otherwise, Black & White style grab-the-ground world panning!
+      this.panningGround = true;
+      this.panAnchorWorld.copy(this.raycastPlane(this.focus.y));
     });
 
     window.addEventListener('pointermove', (e) => {
@@ -85,12 +106,27 @@ export class DesktopSimulator {
       this.lastMouse.set(e.clientX, e.clientY);
 
       if (this.orbiting) {
-        this.yaw -= dx * 0.006;
-        this.pitch = THREE.MathUtils.clamp(this.pitch - dy * 0.005, -1.35, -0.18);
+        this.targetYaw -= dx * 0.0065;
+        this.targetPitch = THREE.MathUtils.clamp(this.targetPitch - dy * 0.0055, -1.42, -0.15);
         return;
       }
 
-      const hit = this.raycastTerrain();
+      if (this.panningGround) {
+        // Pull the world underneath the cursor freely in any direction!
+        const current = this.raycastPlane(this.focus.y);
+        const delta = this.panAnchorWorld.clone().sub(current);
+        delta.y = 0;
+        // Clamp huge horizon jumps
+        if (delta.length() < 45) {
+          this.targetFocus.add(delta);
+          this.focus.add(delta);
+          this.clampFocus();
+          this.updateCamera();
+        }
+        return;
+      }
+
+      const hit = this.raycastGround();
       this.cursorWorldPos.copy(hit);
 
       if (this.drawingGesture) {
@@ -105,6 +141,7 @@ export class DesktopSimulator {
 
     window.addEventListener('pointerup', () => {
       this.orbiting = false;
+      this.panningGround = false;
       if (this.drawingGesture) {
         this.drawingGesture = false;
         const match = this.gestureRecognizer.endStroke(this.camera);
@@ -121,9 +158,11 @@ export class DesktopSimulator {
     this.domElement.addEventListener(
       'wheel',
       (e) => {
-        this.distance = THREE.MathUtils.clamp(this.distance + e.deltaY * 0.03, 10, 95);
+        e.preventDefault();
+        const factor = Math.exp(e.deltaY * 0.0012);
+        this.targetDistance = THREE.MathUtils.clamp(this.targetDistance * factor, 8, 145);
       },
-      { passive: true }
+      { passive: false }
     );
 
     window.addEventListener('keydown', (e) => {
@@ -136,6 +175,19 @@ export class DesktopSimulator {
       if (e.code === 'KeyP') this.callbacks.onPetCreature();
       if (e.code === 'KeyX') this.callbacks.onSlapCreature();
       if (e.code === 'KeyT') this.callbacks.onToggleTotem();
+      if (e.code === 'KeyL') this.callbacks.onLeashCreature(this.cursorWorldPos.clone());
+      if (e.code === 'KeyU') this.callbacks.onUnleashCreature();
+      if (e.code === 'KeyH') {
+        this.targetFocus.set(PLAYER_VILLAGE_POS.x, 5, PLAYER_VILLAGE_POS.z);
+      }
+      if (e.code === 'KeyR') {
+        this.targetFocus.set(RIVAL_VILLAGE_POS.x, 5, RIVAL_VILLAGE_POS.z);
+      }
+      if (e.code === 'KeyC') {
+        const c = this.callbacks.getCreaturePos();
+        this.targetFocus.set(c.x, c.y + 2, c.z);
+        this.targetDistance = Math.min(this.targetDistance, 26);
+      }
     });
 
     window.addEventListener('keyup', (e) => {
@@ -149,31 +201,57 @@ export class DesktopSimulator {
     this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  private raycastTerrain(): THREE.Vector3 {
+  private raycastPlane(planeY: number): THREE.Vector3 {
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObject(this.terrain.mesh, false);
-    if (hits.length > 0) return hits[0].point;
-    // Intersect y = 4 plane fallback
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -4);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
     const out = new THREE.Vector3();
     this.raycaster.ray.intersectPlane(plane, out);
     return out;
   }
 
+  private raycastGround(): THREE.Vector3 {
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObject(this.terrain.mesh, false);
+    if (hits.length > 0) return hits[0].point;
+    return this.raycastPlane(2);
+  }
+
+  private clampFocus(): void {
+    this.targetFocus.x = THREE.MathUtils.clamp(this.targetFocus.x, -125, 125);
+    this.targetFocus.z = THREE.MathUtils.clamp(this.targetFocus.z, -125, 125);
+    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -125, 125);
+    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -125, 125);
+  }
+
   update(dt: number, inVR: boolean): void {
     if (inVR) return;
-    const speed = 26 * dt;
+
+    // Smooth camera orbit via Q / E keys
+    if (this.keys.has('KeyQ')) this.targetYaw += 1.6 * dt;
+    if (this.keys.has('KeyE')) this.targetYaw -= 1.6 * dt;
+
+    // Zoom-scaled panning speed (faster when high up, precise when close down)
+    const boost = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 2.2 : 1.0;
+    const speed = Math.max(18, this.distance * 0.95) * boost * dt;
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
-    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) this.focus.addScaledVector(forward, speed);
-    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.focus.addScaledVector(forward, -speed);
-    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) this.focus.addScaledVector(right, speed);
-    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) this.focus.addScaledVector(right, -speed);
+    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) this.targetFocus.addScaledVector(forward, speed);
+    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.targetFocus.addScaledVector(forward, -speed);
+    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) this.targetFocus.addScaledVector(right, speed);
+    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) this.targetFocus.addScaledVector(right, -speed);
 
-    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -75, 75);
-    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -75, 75);
-    this.focus.y = Math.max(2, this.terrain.getHeightAt(this.focus.x, this.focus.z) + 1.5);
+    this.clampFocus();
+    const groundY = Math.max(0.5, this.terrain.getHeightAt(this.targetFocus.x, this.targetFocus.z));
+    this.targetFocus.y = groundY + 1.5;
+
+    // Smooth critically-damped interpolation
+    const smooth = 1 - Math.exp(-10 * dt);
+    this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, smooth);
+    this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, smooth);
+    this.distance = THREE.MathUtils.lerp(this.distance, this.targetDistance, smooth);
+    this.focus.lerp(this.targetFocus, smooth);
+
     this.updateCamera();
   }
 
