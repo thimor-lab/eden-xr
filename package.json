@@ -1,0 +1,24 @@
+{
+  "name": "eden-xr",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "EdenXR — A Black & White inspired full-immersion VR god-game prototype for Android XR",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.172.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^3.0.4"
+  }
+}
