@@ -39,4 +39,19 @@ describe('GameState (Belief, Influence Ring, Conversion)', () => {
     expect(state.rivalConverted).toBe(true);
     expect(convertedMethod).toBe('peaceful');
   });
+
+  it('tracks granary food and wood replenishment within bounds', () => {
+    const bus = new EventBus();
+    const state = new GameState(bus);
+    const startFood = state.villageFood;
+    const startWood = state.villageWood;
+
+    state.addFood(35);
+    state.addWood(45);
+    expect(state.villageFood).toBe(startFood + 35);
+    expect(state.villageWood).toBe(startWood + 45);
+
+    state.addWood(500);
+    expect(state.villageWood).toBe(state.maxResource);
+  });
 });

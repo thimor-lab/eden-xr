@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { AlignmentSystem } from '../core/AlignmentSystem';
 import { EventBus, MiracleType } from '../core/EventBus';
 import { GameState } from '../core/GameState';
-import { PhysicsWorld } from '../physics/PhysicsWorld';
+import { PhysicsProp, PhysicsWorld } from '../physics/PhysicsWorld';
 import { BuildingSystem } from '../villages/BuildingSystem';
 import { Village } from '../villages/Village';
 import { InteractableProps } from '../world/InteractableProps';
@@ -58,6 +58,11 @@ export class MiracleEffects {
         const offset = new THREE.Vector3((i - 1) * 1.4, 2.6 + i * 0.4, ((i % 2) - 0.5) * 1.2);
         this.props.spawnFood(groundPos.clone().add(offset));
       }
+      const granary = this.buildings.findGranary('player');
+      if (granary && granary.position.distanceTo(groundPos) < 12) {
+        this.gameState.addFood(40);
+        this.bus.emit('toast:show', { message: 'Granary replenished! +40 Food', durationMs: 1800 });
+      }
       this.spawnBurst(groundPos, 0xffd966, 3.5);
       this.alignment.shift(0.08, 'Food Miracle');
       this.gameState.addBelief(12);
@@ -70,6 +75,11 @@ export class MiracleEffects {
       for (let i = 0; i < 2; i++) {
         const offset = new THREE.Vector3((i - 0.5) * 1.6, 2.5, (i - 0.5) * 1.0);
         this.props.spawnWood(groundPos.clone().add(offset));
+      }
+      const granary = this.buildings.findGranary('player');
+      if (granary && granary.position.distanceTo(groundPos) < 12) {
+        this.gameState.addWood(40);
+        this.bus.emit('toast:show', { message: 'Granary replenished! +40 Wood', durationMs: 1800 });
       }
       // Also directly progress any nearby scaffold!
       for (const b of this.buildings.buildings) {
@@ -128,6 +138,51 @@ export class MiracleEffects {
     }
 
     this.bus.emit('miracle:cast', { type, position: groundPos });
+  }
+
+  /**
+   * Checks if any uprooted tree, wood pile, or food orb has been dropped into
+   * the Player Village Granary/Storehouse and converts it into village resources.
+   */
+  checkGranaryDeposits(playerVillage: Village): void {
+    const granary = this.buildings.findGranary('player');
+    if (!granary) return;
+
+    const toAbsorb: PhysicsProp[] = [];
+    for (const prop of this.physics.props.values()) {
+      if (prop.grabbedBy) continue;
+      if (prop.kind !== 'tree' && prop.kind !== 'wood' && prop.kind !== 'food') continue;
+      if (prop.kind === 'tree' && !prop.uprooted) continue;
+
+      const d = prop.mesh.position.distanceTo(granary.position);
+      if (d < 6.2) {
+        toAbsorb.push(prop);
+      }
+    }
+
+    for (const prop of toAbsorb) {
+      if (prop.kind === 'tree') {
+        this.gameState.addWood(45);
+        this.alignment.shift(0.07, 'Tree Deposited in Granary');
+        this.gameState.addBelief(15);
+        this.spawnBurst(granary.position, 0xd49b54, 4.2);
+        this.bus.emit('toast:show', { message: 'Tree stored in Granary! +45 Wood', durationMs: 2000 });
+      } else if (prop.kind === 'wood') {
+        this.gameState.addWood(30);
+        this.alignment.shift(0.05, 'Wood Deposited in Granary');
+        this.gameState.addBelief(10);
+        this.spawnBurst(granary.position, 0xd49b54, 3.4);
+        this.bus.emit('toast:show', { message: 'Wood stored in Granary! +30 Wood', durationMs: 1800 });
+      } else if (prop.kind === 'food') {
+        this.gameState.addFood(35);
+        this.alignment.shift(0.06, 'Food Deposited in Granary');
+        this.gameState.addBelief(12);
+        this.spawnBurst(granary.position, 0xffd966, 3.6);
+        this.bus.emit('toast:show', { message: 'Food stored in Granary! +35 Food', durationMs: 1800 });
+      }
+      playerVillage.villagers.triggerCheer(granary.position, 18);
+      this.physics.removeProp(prop.id);
+    }
   }
 
   handleImpact(kind: string, position: THREE.Vector3, impulse: number, playerVillage: Village, rivalVillage: Village): void {

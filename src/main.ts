@@ -33,6 +33,7 @@ async function bootstrap(): Promise<void> {
   const manaValEl = document.getElementById('mana-val')!;
   const manaBarEl = document.getElementById('mana-bar')!;
   const beliefValEl = document.getElementById('belief-val')!;
+  const granaryValEl = document.getElementById('granary-val')!;
   const rivalValEl = document.getElementById('rival-val')!;
   const creatureValEl = document.getElementById('creature-val')!;
 
@@ -305,6 +306,7 @@ async function bootstrap(): Promise<void> {
 
     // Simulation step
     physics.step(dt);
+    miracleEffects.checkGranaryDeposits(playerVillage);
     buildings.update(dt, elapsedSec);
     playerVillage.update(dt, elapsedSec, gameState, palette);
     rivalVillage.update(dt, elapsedSec, gameState, palette);
@@ -332,6 +334,7 @@ async function bootstrap(): Promise<void> {
       manaValEl.textContent = `${Math.round(gameState.prayerPower)} / ${gameState.maxPrayerPower}`;
       manaBarEl.style.width = `${Math.round((gameState.prayerPower / gameState.maxPrayerPower) * 100)}%`;
       beliefValEl.textContent = `${Math.round(gameState.playerBelief)} (Impr. ${Math.round(gameState.playerImpressiveness)})`;
+      granaryValEl.textContent = `Food ${Math.round(gameState.villageFood)} · Wood ${Math.round(gameState.villageWood)}`;
       rivalValEl.textContent = gameState.rivalConverted
         ? `Converted (${gameState.victoryMethod})!`
         : `Unconverted (${Math.round(gameState.rivalConversion)}%)`;

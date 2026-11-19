@@ -5,6 +5,9 @@ export class GameState {
   public readonly maxPrayerPower = 100;
   public playerBelief = 120;
   public playerImpressiveness = 40;
+  public villageFood = 45;
+  public villageWood = 40;
+  public readonly maxResource = 200;
   public rivalConversion = 0; // 0..100%
   public rivalConverted = false;
   public victoryMethod: 'peaceful' | 'conquest' | null = null;
@@ -35,6 +38,20 @@ export class GameState {
     this.playerImpressiveness = Math.max(0, this.playerImpressiveness + amount);
   }
 
+  addFood(amount: number): void {
+    this.villageFood = Math.max(0, Math.min(this.maxResource, this.villageFood + amount));
+  }
+
+  addWood(amount: number): void {
+    this.villageWood = Math.max(0, Math.min(this.maxResource, this.villageWood + amount));
+  }
+
+  consumeWood(amount: number): boolean {
+    if (this.villageWood < amount) return false;
+    this.villageWood -= amount;
+    return true;
+  }
+
   advanceRivalConversion(delta: number, method: 'peaceful' | 'conquest'): void {
     if (this.rivalConverted) return;
     this.rivalConversion = Math.max(0, Math.min(100, this.rivalConversion + delta));
@@ -57,6 +74,8 @@ export class GameState {
     this.prayerPower = 65;
     this.playerBelief = 120;
     this.playerImpressiveness = 40;
+    this.villageFood = 45;
+    this.villageWood = 40;
     this.rivalConversion = 0;
     this.rivalConverted = false;
     this.victoryMethod = null;

@@ -105,24 +105,40 @@ export class Village {
 
   update(dt: number, elapsed: number, gameState: GameState, palette?: AlignmentPalette): void {
     const unfinished = this.myBuildings.filter((b) => b.progress < 1 && !b.destroyed);
+    const hasWoodStock = this.id === 'player' && gameState.villageWood > 0;
     this.activeWorshippers = this.villagers.update(
       dt,
       elapsed,
       this.totemPos,
       this.worshipRatio,
       unfinished,
-      (b, amt) => this.buildings.addProgress(b, amt)
+      (b, amt) => {
+        const boost = hasWoodStock ? 2.0 : 1.0;
+        if (hasWoodStock) gameState.addWood(-dt * 0.8);
+        this.buildings.addProgress(b, amt * boost);
+      }
     );
 
     this.prayerOrb.rotation.y += dt * (1.2 + this.worshipRatio * 2.5);
     this.prayerOrb.scale.setScalar(0.75 + 0.35 * (gameState.prayerPower / gameState.maxPrayerPower));
 
     if (this.id === 'player') {
+      // Sync Granary visual piles (golden grain mound + stacked timber)
+      this.buildings.syncGranaryStock(
+        'player',
+        gameState.villageFood / gameState.maxResource,
+        gameState.villageWood / gameState.maxResource
+      );
+
+      // Gentle villager food consumption; well-fed villagers worship 30% stronger!
+      gameState.addFood(-dt * 0.28);
+      const fedBonus = gameState.villageFood > 20 ? 1.3 : 0.85;
+
       // Worshippers generate Prayer Power and gradual Belief!
-      const manaGain = (1.1 + this.activeWorshippers * 0.65) * dt;
+      const manaGain = (1.1 + this.activeWorshippers * 0.65 * fedBonus) * dt;
       gameState.addPrayerPower(manaGain);
       if (this.activeWorshippers > 0) {
-        gameState.addBelief(this.activeWorshippers * 0.22 * dt);
+        gameState.addBelief(this.activeWorshippers * 0.22 * fedBonus * dt);
       }
 
       // Passive peaceful conversion if player Impressiveness is high

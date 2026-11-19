@@ -16,7 +16,7 @@ export class CreatureController {
 
   private currentTarget = new THREE.Vector3();
   private currentAction: CreatureActionType = 'wander';
-  private decisionTimer = 3.0;
+  private decisionTimer = 14.0; // Stay prominently near Player Village at start so player sees Creature immediately
   private conditioningCooldown = 0;
 
   constructor(
@@ -28,21 +28,21 @@ export class CreatureController {
     private readonly bus: EventBus
   ) {
     this.visuals = new CreatureVisuals(scene);
-    this.position = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 8, 0, PLAYER_VILLAGE_POS.z + 9);
+    this.position = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 1.5, 0, PLAYER_VILLAGE_POS.z + 6.5);
     this.position.y = terrain.getHeightAt(this.position.x, this.position.z);
     this.currentTarget.copy(this.position);
     this.visuals.root.position.copy(this.position);
   }
 
   get interactionCenter(): THREE.Vector3 {
-    return new THREE.Vector3(this.position.x, this.position.y + 3.2, this.position.z);
+    return new THREE.Vector3(this.position.x, this.position.y + 5.2, this.position.z);
   }
 
   /** Detect direct VR hand petting (gentle palm) or slapping (fast palm) */
   checkHandConditioning(handWorldPos: THREE.Vector3, handSpeed: number, nowSec: number): boolean {
     if (this.conditioningCooldown > 0) return false;
     const dist = handWorldPos.distanceTo(this.interactionCenter);
-    if (dist > 3.2) return false;
+    if (dist > 5.2) return false;
 
     if (handSpeed > 2.2) {
       this.condition('slap', nowSec);

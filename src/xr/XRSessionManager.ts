@@ -13,6 +13,8 @@ export class XRSessionManager {
   ) {
     this.renderer.xr.enabled = true;
     this.renderer.xr.setReferenceSpaceType('local-floor');
+    // Higher framebuffer scale improves clarity on high-DPI Android XR headsets
+    this.renderer.xr.setFramebufferScaleFactor(1.4);
     void this.initButton();
   }
 

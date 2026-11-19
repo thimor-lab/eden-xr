@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 export const ISLAND_SIZE = 180;
-export const ISLAND_SEGMENTS = 96;
+export const ISLAND_SEGMENTS = 128;
 export const PLAYER_VILLAGE_POS = new THREE.Vector3(-24, 0, 10);
 export const RIVAL_VILLAGE_POS = new THREE.Vector3(30, 0, -14);
 
