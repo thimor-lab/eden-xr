@@ -19,12 +19,12 @@ export interface DesktopCallbacks {
 }
 
 /**
- * Free-roaming Black & White style Mouse + Keyboard God-Hand simulator:
- * - Left-drag empty terrain: Pull/pan smoothly across the entire island!
- * - Left-drag rock/tree/wood/food: Grab & throw!
- * - Right-drag (or Q/E): Smooth 360° orbit & tilt!
+ * Silky, unrestricted Mouse + Trackpad + Keyboard God-Hand simulator:
+ * - Left-drag empty terrain: Smooth screen-space pan anywhere across the island & ocean!
+ * - Left-drag rock/tree/wood/food/villager: Grab & throw!
+ * - Right-drag / Shift+Left-drag / Q & E: Smooth 360° orbit & pitch tilt!
  * - WASD / Arrows (+ Shift boost): Smooth zoom-scaled panning!
- * - Scroll wheel: Smooth exponential zoom (close-up to full-island god view)!
+ * - Scroll wheel / Trackpad scroll: Smooth exponential zoom (close-up to full-island overview)!
  * - L: Tie Creature Leash to cursor · U: Unleash · C: Focus Creature · H: Home · R: Rival
  */
 export class DesktopSimulator {
@@ -36,14 +36,13 @@ export class DesktopSimulator {
   private targetYaw = 0.25;
   private pitch = -0.58;
   private targetPitch = -0.58;
-  private distance = 36;
-  private targetDistance = 36;
+  private distance = 42;
+  private targetDistance = 42;
   private focus = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 2, 5, PLAYER_VILLAGE_POS.z + 2);
   private targetFocus = new THREE.Vector3(PLAYER_VILLAGE_POS.x + 2, 5, PLAYER_VILLAGE_POS.z + 2);
 
   private orbiting = false;
   private panningGround = false;
-  private panAnchorWorld = new THREE.Vector3();
   private lastMouse = new THREE.Vector2();
 
   private grabbedProp: PhysicsProp | null = null;
@@ -81,7 +80,8 @@ export class DesktopSimulator {
       this.updatePointer(e);
       this.lastMouse.set(e.clientX, e.clientY);
 
-      if (e.button === 2 || e.button === 1) {
+      // Right-click, Middle-click, or Shift+Left-click (great for laptop trackpads!) orbits camera
+      if (e.button === 2 || e.button === 1 || (e.button === 0 && e.shiftKey)) {
         this.orbiting = true;
         return;
       }
@@ -96,7 +96,7 @@ export class DesktopSimulator {
       }
 
       // Check if clicking near a grabbable physics prop
-      const nearest = this.physics.findNearestGrabbable(hit, 3.2);
+      const nearest = this.physics.findNearestGrabbable(hit, 2.8);
       if (nearest) {
         this.grabbedProp = nearest;
         const justUprooted = this.physics.grabProp(nearest, 'desktop');
@@ -117,9 +117,8 @@ export class DesktopSimulator {
         return;
       }
 
-      // Otherwise, Black & White style grab-the-ground world panning!
+      // Smooth world-pull panning on empty ground
       this.panningGround = true;
-      this.panAnchorWorld.copy(this.raycastPlane(this.focus.y));
     });
 
     window.addEventListener('pointermove', (e) => {
@@ -130,22 +129,19 @@ export class DesktopSimulator {
 
       if (this.orbiting) {
         this.targetYaw -= dx * 0.0065;
-        this.targetPitch = THREE.MathUtils.clamp(this.targetPitch - dy * 0.0055, -1.42, -0.15);
+        this.targetPitch = THREE.MathUtils.clamp(this.targetPitch - dy * 0.0055, -1.45, -0.14);
         return;
       }
 
       if (this.panningGround) {
-        // Pull the world underneath the cursor freely in any direction!
-        const current = this.raycastPlane(this.focus.y);
-        const delta = this.panAnchorWorld.clone().sub(current);
-        delta.y = 0;
-        // Clamp huge horizon jumps
-        if (delta.length() < 45) {
-          this.targetFocus.add(delta);
-          this.focus.add(delta);
-          this.clampFocus();
-          this.updateCamera();
-        }
+        // Screen-space horizontal panning scaled by camera distance — zero horizon jumps!
+        const panScale = (this.distance * 0.0022) / Math.max(0.35, -Math.sin(this.pitch));
+        const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+        const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+
+        this.targetFocus.addScaledVector(right, -dx * panScale);
+        this.targetFocus.addScaledVector(forward, dy * panScale);
+        this.clampFocus();
         return;
       }
 
@@ -184,8 +180,10 @@ export class DesktopSimulator {
       'wheel',
       (e) => {
         e.preventDefault();
-        const factor = Math.exp(e.deltaY * 0.0012);
-        this.targetDistance = THREE.MathUtils.clamp(this.targetDistance * factor, 8, 145);
+        // Smooth exponential zoom on vertical wheel / trackpad scroll
+        const clampedDelta = THREE.MathUtils.clamp(e.deltaY, -120, 120);
+        const factor = Math.exp(clampedDelta * 0.0016);
+        this.targetDistance = THREE.MathUtils.clamp(this.targetDistance * factor, 8, 160);
       },
       { passive: false }
     );
@@ -211,7 +209,7 @@ export class DesktopSimulator {
       if (e.code === 'KeyC') {
         const c = this.callbacks.getCreaturePos();
         this.targetFocus.set(c.x, c.y + 2, c.z);
-        this.targetDistance = Math.min(this.targetDistance, 26);
+        this.targetDistance = Math.min(this.targetDistance, 28);
       }
     });
 
@@ -230,8 +228,8 @@ export class DesktopSimulator {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
     const out = new THREE.Vector3();
-    this.raycaster.ray.intersectPlane(plane, out);
-    return out;
+    const hit = this.raycaster.ray.intersectPlane(plane, out);
+    return hit ? out : this.focus.clone();
   }
 
   private raycastGround(): THREE.Vector3 {
@@ -242,22 +240,22 @@ export class DesktopSimulator {
   }
 
   private clampFocus(): void {
-    this.targetFocus.x = THREE.MathUtils.clamp(this.targetFocus.x, -125, 125);
-    this.targetFocus.z = THREE.MathUtils.clamp(this.targetFocus.z, -125, 125);
-    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -125, 125);
-    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -125, 125);
+    this.targetFocus.x = THREE.MathUtils.clamp(this.targetFocus.x, -145, 145);
+    this.targetFocus.z = THREE.MathUtils.clamp(this.targetFocus.z, -145, 145);
+    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -145, 145);
+    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -145, 145);
   }
 
   update(dt: number, inVR: boolean): void {
     if (inVR) return;
 
     // Smooth camera orbit via Q / E keys
-    if (this.keys.has('KeyQ')) this.targetYaw += 1.6 * dt;
-    if (this.keys.has('KeyE')) this.targetYaw -= 1.6 * dt;
+    if (this.keys.has('KeyQ')) this.targetYaw += 1.7 * dt;
+    if (this.keys.has('KeyE')) this.targetYaw -= 1.7 * dt;
 
     // Zoom-scaled panning speed (faster when high up, precise when close down)
     const boost = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 2.2 : 1.0;
-    const speed = Math.max(18, this.distance * 0.95) * boost * dt;
+    const speed = Math.max(22, this.distance * 1.15) * boost * dt;
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
@@ -270,8 +268,8 @@ export class DesktopSimulator {
     const groundY = Math.max(0.5, this.terrain.getHeightAt(this.targetFocus.x, this.targetFocus.z));
     this.targetFocus.y = groundY + 1.5;
 
-    // Smooth critically-damped interpolation
-    const smooth = 1 - Math.exp(-10 * dt);
+    // Silky critically-damped interpolation
+    const smooth = 1 - Math.exp(-12 * dt);
     this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, smooth);
     this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, smooth);
     this.distance = THREE.MathUtils.lerp(this.distance, this.targetDistance, smooth);

@@ -111,6 +111,10 @@ async function bootstrap(): Promise<void> {
   // XR & Desktop Input
   const handTracker = new HandTracker(godRig);
   const locomotion = new WorldLocomotion(godRig, terrain);
+  // Keep godRig at identity in Desktop mode so camera.position is true world space!
+  godRig.position.set(0, 0, 0);
+  godRig.rotation.set(0, 0, 0);
+  godRig.scale.setScalar(1);
   const gestureRecognizer = new GestureRecognizer(scene);
   const feedback = new InteractionFeedback(scene, terrain);
 
@@ -177,7 +181,13 @@ async function bootstrap(): Promise<void> {
   const xrManager = new XRSessionManager(renderer, enterVrBtn, (inVR) => {
     overlayEl.style.display = inVR ? 'none' : 'flex';
     if (inVR) {
+      camera.position.set(0, 0, 0);
+      camera.rotation.set(0, 0, 0);
       locomotion.resetView();
+    } else {
+      godRig.position.set(0, 0, 0);
+      godRig.rotation.set(0, 0, 0);
+      godRig.scale.setScalar(1);
     }
   });
 
@@ -267,7 +277,9 @@ async function bootstrap(): Promise<void> {
     alignment.reset();
     gameState.reset();
     playerVillage.setTotemRatio(0.45);
-    locomotion.resetView();
+    if (xrManager.inVR) {
+      locomotion.resetView();
+    }
     bus.emit('toast:show', { message: 'Island of Eden reset!', durationMs: 1800 });
   });
 
