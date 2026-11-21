@@ -21,6 +21,46 @@ export interface PhysicsProp {
   maxAge?: number;
 }
 
+/**
+ * Subtle Black & White "aftertouch" aim-assist: nudges a throw velocity slightly
+ * toward an intended target (e.g. Rival building or Granary) if already aimed within a cone.
+ */
+export function applyAftertouch(
+  origin: THREE.Vector3,
+  velocity: THREE.Vector3,
+  candidateTargets: THREE.Vector3[],
+  assistStrength = 0.28
+): THREE.Vector3 {
+  const speed = velocity.length();
+  if (speed < 6 || candidateTargets.length === 0) return velocity.clone();
+
+  const horizDir = new THREE.Vector3(velocity.x, 0, velocity.z);
+  if (horizDir.lengthSq() < 1) return velocity.clone();
+  horizDir.normalize();
+
+  let bestTarget: THREE.Vector3 | null = null;
+  let bestDot = 0.84; // ~33 degree cone
+
+  for (const t of candidateTargets) {
+    const toTarget = new THREE.Vector3(t.x - origin.x, 0, t.z - origin.z);
+    const dist = toTarget.length();
+    if (dist < 4 || dist > 90) continue;
+    toTarget.divideScalar(dist);
+    const d = horizDir.dot(toTarget);
+    if (d > bestDot) {
+      bestDot = d;
+      bestTarget = t;
+    }
+  }
+
+  if (!bestTarget) return velocity.clone();
+
+  const desiredHoriz = new THREE.Vector3(bestTarget.x - origin.x, 0, bestTarget.z - origin.z).normalize();
+  const horizSpeed = Math.hypot(velocity.x, velocity.z);
+  const blended = horizDir.lerp(desiredHoriz, assistStrength).normalize().multiplyScalar(horizSpeed);
+  return new THREE.Vector3(blended.x, velocity.y, blended.z);
+}
+
 export class PhysicsWorld {
   public world!: RAPIER.World;
   public readonly props = new Map<string, PhysicsProp>();
@@ -128,23 +168,57 @@ export class PhysicsWorld {
     return best;
   }
 
-  grabProp(prop: PhysicsProp, handId: string): void {
+  findGrabbableAlongRay(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDist: number,
+    conePadding = 2.4
+  ): PhysicsProp | null {
+    const dir = direction.clone().normalize();
+    let best: PhysicsProp | null = null;
+    let bestScore = Infinity;
+    const toProp = new THREE.Vector3();
+
+    for (const prop of this.props.values()) {
+      if (prop.grabbedBy) continue;
+      const t = prop.body.translation();
+      toProp.set(t.x - origin.x, t.y - origin.y, t.z - origin.z);
+      const along = toProp.dot(dir);
+      if (along < 0.5 || along > maxDist) continue;
+      const perpSq = toProp.lengthSq() - along * along;
+      const hitRadius = prop.radius + conePadding;
+      if (perpSq <= hitRadius * hitRadius) {
+        const score = Math.sqrt(Math.max(0, perpSq)) + along * 0.04;
+        if (score < bestScore) {
+          bestScore = score;
+          best = prop;
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Grabs a prop; returns true if a rooted tree was just uprooted */
+  grabProp(prop: PhysicsProp, handId: string): boolean {
+    let justUprooted = false;
     if (!prop.uprooted) {
       // Uproot static tree into dynamic physics object!
       prop.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
       prop.uprooted = true;
+      justUprooted = true;
     }
     prop.grabbedBy = handId;
     prop.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    return justUprooted;
   }
 
-  moveGrabbedProp(prop: PhysicsProp, targetWorldPos: THREE.Vector3): void {
-    prop.body.setNextKinematicTranslation({
-      x: targetWorldPos.x,
-      y: targetWorldPos.y,
-      z: targetWorldPos.z,
-    });
-    prop.mesh.position.copy(targetWorldPos);
+  moveGrabbedProp(prop: PhysicsProp, targetWorldPos: THREE.Vector3, smoothFactor = 0.35): void {
+    const cur = prop.body.translation();
+    const nextX = THREE.MathUtils.lerp(cur.x, targetWorldPos.x, smoothFactor);
+    const nextY = THREE.MathUtils.lerp(cur.y, targetWorldPos.y, smoothFactor);
+    const nextZ = THREE.MathUtils.lerp(cur.z, targetWorldPos.z, smoothFactor);
+    prop.body.setNextKinematicTranslation({ x: nextX, y: nextY, z: nextZ });
+    prop.mesh.position.set(nextX, nextY, nextZ);
   }
 
   releaseProp(prop: PhysicsProp, throwVelocity: THREE.Vector3): void {

@@ -96,6 +96,14 @@ export class SpatialAudio {
     this.playSpatialTone(position, heavy ? 110 : 160, 32, heavy ? 0.45 : 0.25, 'triangle', heavy ? 0.35 : 0.22);
   }
 
+  playGrab(position: THREE.Vector3): void {
+    this.playSpatialTone(position, 280, 420, 0.12, 'sine', 0.16);
+  }
+
+  playUproot(position: THREE.Vector3): void {
+    this.playSpatialTone(position, 145, 310, 0.26, 'triangle', 0.28);
+  }
+
   playMiracle(type: string, position: THREE.Vector3): void {
     if (type === 'lightning') {
       this.playSpatialTone(position, 420, 40, 0.75, 'sawtooth', 0.35);

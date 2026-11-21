@@ -13,6 +13,9 @@ export interface DesktopCallbacks {
   onLeashCreature: (targetPos: THREE.Vector3) => void;
   onUnleashCreature: () => void;
   getCreaturePos: () => THREE.Vector3;
+  onPropGrabbed?: (prop: PhysicsProp, justUprooted: boolean) => void;
+  onAdjustReleaseVelocity?: (prop: PhysicsProp, vel: THREE.Vector3) => THREE.Vector3;
+  tryPickupVillager?: (worldPos: THREE.Vector3) => PhysicsProp | null;
 }
 
 /**
@@ -49,6 +52,14 @@ export class DesktopSimulator {
   private drawingGesture = false;
 
   public readonly cursorWorldPos = new THREE.Vector3(PLAYER_VILLAGE_POS.x, 5, PLAYER_VILLAGE_POS.z);
+
+  getHeldProp(): PhysicsProp | null {
+    return this.grabbedProp;
+  }
+
+  getThrowVelocity(): THREE.Vector3 {
+    return this.throwVelocity;
+  }
 
   constructor(
     private readonly domElement: HTMLElement,
@@ -88,7 +99,19 @@ export class DesktopSimulator {
       const nearest = this.physics.findNearestGrabbable(hit, 3.2);
       if (nearest) {
         this.grabbedProp = nearest;
-        this.physics.grabProp(nearest, 'desktop');
+        const justUprooted = this.physics.grabProp(nearest, 'desktop');
+        this.callbacks.onPropGrabbed?.(nearest, justUprooted);
+        this.lastGrabWorld.copy(hit).add(new THREE.Vector3(0, 3.5, 0));
+        this.throwVelocity.set(0, 0, 0);
+        return;
+      }
+
+      // Or pick up a nearby villager!
+      const villagerProp = this.callbacks.tryPickupVillager?.(hit) ?? null;
+      if (villagerProp) {
+        this.grabbedProp = villagerProp;
+        this.physics.grabProp(villagerProp, 'desktop');
+        this.callbacks.onPropGrabbed?.(villagerProp, false);
         this.lastGrabWorld.copy(hit).add(new THREE.Vector3(0, 3.5, 0));
         this.throwVelocity.set(0, 0, 0);
         return;
@@ -150,7 +173,9 @@ export class DesktopSimulator {
         }
       }
       if (this.grabbedProp) {
-        this.physics.releaseProp(this.grabbedProp, this.throwVelocity);
+        const finalVel =
+          this.callbacks.onAdjustReleaseVelocity?.(this.grabbedProp, this.throwVelocity) ?? this.throwVelocity;
+        this.physics.releaseProp(this.grabbedProp, finalVel);
         this.grabbedProp = null;
       }
     });

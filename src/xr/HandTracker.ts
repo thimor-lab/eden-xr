@@ -8,7 +8,9 @@ export interface HandState {
   palmWorldPos: THREE.Vector3;
   pinchWorldPos: THREE.Vector3;
   indexTipWorldPos: THREE.Vector3;
+  aimDirectionWorld: THREE.Vector3;
   velocityWorld: THREE.Vector3;
+  peakVelocityWorld: THREE.Vector3;
   isPinching: boolean;
   wasPinching: boolean;
   isGrabbing: boolean;
@@ -16,6 +18,24 @@ export interface HandState {
   isPointing: boolean;
   wasPointing: boolean;
   isOpenPalm: boolean;
+}
+
+/**
+ * Returns the strongest velocity vector from a short recent frame buffer,
+ * preventing VR throws from losing momentum during the 2-3 frames fingers open.
+ */
+export function computePeakVelocity(history: THREE.Vector3[]): THREE.Vector3 {
+  if (history.length === 0) return new THREE.Vector3();
+  let best = history[0];
+  let bestLenSq = best.lengthSq();
+  for (let i = 1; i < history.length; i++) {
+    const lsq = history[i].lengthSq();
+    if (lsq > bestLenSq) {
+      bestLenSq = lsq;
+      best = history[i];
+    }
+  }
+  return best.clone();
 }
 
 const JOINT_ORDER: XRHandJoint[] = [
@@ -53,7 +73,9 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
     palmWorldPos: new THREE.Vector3(),
     pinchWorldPos: new THREE.Vector3(),
     indexTipWorldPos: new THREE.Vector3(),
+    aimDirectionWorld: new THREE.Vector3(0, -1, 0),
     velocityWorld: new THREE.Vector3(),
+    peakVelocityWorld: new THREE.Vector3(),
     isPinching: false,
     wasPinching: false,
     isGrabbing: false,
@@ -66,7 +88,7 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
 
 /**
  * Extracts 25-joint skeletal hand poses from WebXR on Android XR,
- * classifies pinch/grab/point/open-palm poses, and computes smoothed world velocity.
+ * classifies pinch/grab/point/open-palm poses, and computes smoothed & peak world velocity.
  */
 export class HandTracker {
   public readonly left: HandState = createEmptyHand('left');
@@ -75,6 +97,7 @@ export class HandTracker {
   private readonly leftMesh: GodHandMesh;
   private readonly rightMesh: GodHandMesh;
   private readonly prevPos = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+  private readonly velHistory: Record<'left' | 'right', THREE.Vector3[]> = { left: [], right: [] };
 
   constructor(private readonly godRig: THREE.Group) {
     this.leftMesh = new GodHandMesh(godRig);
@@ -190,6 +213,14 @@ export class HandTracker {
     state.pinchWorldPos.copy(pinchLocal).applyMatrix4(this.godRig.matrixWorld);
     state.indexTipWorldPos.copy(indexTip).applyMatrix4(this.godRig.matrixWorld);
 
+    // Compute world-space aiming direction from wrist through palm/index
+    const wristLocal = map.get('wrist') ?? palmLocal;
+    const wristWorld = wristLocal.clone().applyMatrix4(this.godRig.matrixWorld);
+    const dir = state.indexTipWorldPos.clone().sub(wristWorld);
+    if (dir.lengthSq() > 1e-5) {
+      state.aimDirectionWorld.copy(dir.normalize());
+    }
+
     this.updateVelocity(state, state.palmWorldPos, dt);
 
     // Pose classification in physical meter space (independent of godRig.scale!)
@@ -211,9 +242,13 @@ export class HandTracker {
 
   private updateVelocity(state: HandState, currentWorldPos: THREE.Vector3, dt: number): void {
     const prev = this.prevPos[state.handedness];
+    const hist = this.velHistory[state.handedness];
     if (dt > 1e-4 && prev.lengthSq() > 0) {
       const instant = currentWorldPos.clone().sub(prev).divideScalar(dt);
-      state.velocityWorld.lerp(instant, 0.35);
+      state.velocityWorld.lerp(instant, 0.42);
+      hist.push(state.velocityWorld.clone());
+      if (hist.length > 6) hist.shift();
+      state.peakVelocityWorld.copy(computePeakVelocity(hist));
     }
     prev.copy(currentWorldPos);
   }

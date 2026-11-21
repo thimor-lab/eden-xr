@@ -134,4 +134,32 @@ export class InteractableProps {
       mass: 1.0,
     });
   }
+
+  spawnVillagerProp(position: THREE.Vector3, tunicHex = 0x3a82d6): PhysicsProp {
+    const group = new THREE.Group();
+    const tunicMat = new THREE.MeshStandardMaterial({ color: tunicHex, roughness: 0.8, flatShading: true });
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xf1c7a4, roughness: 0.8, flatShading: true });
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.32, 1.05, 6), tunicMat);
+    body.castShadow = true;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 6, 5), headMat);
+    head.position.y = 0.65;
+    // Raised waving arms
+    const armGeom = new THREE.CylinderGeometry(0.06, 0.06, 0.55, 5);
+    const armL = new THREE.Mesh(armGeom, tunicMat);
+    armL.position.set(-0.32, 0.35, 0);
+    armL.rotation.z = 0.75;
+    const armR = armL.clone();
+    armR.position.x = 0.32;
+    armR.rotation.z = -0.75;
+    group.add(body, head, armL, armR);
+
+    return this.physics.registerProp({
+      kind: 'villager',
+      mesh: group,
+      position,
+      radius: 0.65,
+      mass: 0.9,
+      maxAge: 14,
+    });
+  }
 }

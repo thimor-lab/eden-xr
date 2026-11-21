@@ -6,7 +6,7 @@ import { GameState } from './core/GameState';
 import { CreatureController } from './creature/CreatureController';
 import { MiracleEffects } from './miracles/MiracleEffects';
 import { MiracleManager } from './miracles/MiracleManager';
-import { PhysicsProp, PhysicsWorld } from './physics/PhysicsWorld';
+import { applyAftertouch, PhysicsProp, PhysicsWorld } from './physics/PhysicsWorld';
 import { BuildingSystem } from './villages/BuildingSystem';
 import { Village } from './villages/Village';
 import { InfluenceRing } from './world/InfluenceRing';
@@ -17,6 +17,7 @@ import { SkyAtmosphere } from './world/SkyAtmosphere';
 import { DesktopSimulator } from './xr/DesktopSimulator';
 import { GestureRecognizer } from './xr/GestureRecognizer';
 import { HandState, HandTracker } from './xr/HandTracker';
+import { InteractionFeedback } from './xr/InteractionFeedback';
 import { WorldLocomotion } from './xr/WorldLocomotion';
 import { XRSessionManager } from './xr/XRSessionManager';
 
@@ -111,6 +112,67 @@ async function bootstrap(): Promise<void> {
   const handTracker = new HandTracker(godRig);
   const locomotion = new WorldLocomotion(godRig, terrain);
   const gestureRecognizer = new GestureRecognizer(scene);
+  const feedback = new InteractionFeedback(scene, terrain);
+
+  function handlePropGrabbed(prop: PhysicsProp, justUprooted: boolean): void {
+    if (justUprooted) {
+      feedback.spawnUprootBurst(prop.mesh.position);
+      audio.playUproot(prop.mesh.position);
+      bus.emit('toast:show', {
+        message: 'Tree uprooted! Drop it into the Granary for +45 Wood.',
+        durationMs: 2000,
+      });
+    } else {
+      audio.playGrab(prop.mesh.position);
+    }
+  }
+
+  function adjustReleaseVelocity(prop: PhysicsProp, rawVel: THREE.Vector3): THREE.Vector3 {
+    const pos = prop.mesh.position;
+    if (prop.kind === 'rock' || prop.kind === 'fireball') {
+      const targets = rivalVillage.myBuildings.filter((b) => !b.destroyed).map((b) => b.position);
+      return applyAftertouch(pos, rawVel, targets, 0.3);
+    }
+    if (prop.kind === 'tree' || prop.kind === 'wood' || prop.kind === 'food') {
+      const targets: THREE.Vector3[] = [];
+      const granary = buildings.findGranary('player');
+      if (granary) targets.push(granary.position);
+      for (const b of playerVillage.myBuildings) {
+        if (b.progress < 1 && !b.destroyed) targets.push(b.position);
+      }
+      return applyAftertouch(pos, rawVel, targets, 0.35);
+    }
+    if (prop.kind === 'villager') {
+      if (rawVel.length() > 11) {
+        alignment.shift(-0.08, 'Hurled Villager');
+        bus.emit('toast:show', { message: 'You hurled a villager! (-Evil)', durationMs: 1800 });
+      } else {
+        // Gentle drop near scaffold or Totem rewards the player
+        const nearScaffold = playerVillage.myBuildings.find(
+          (b) => b.progress < 1 && !b.destroyed && b.position.distanceTo(pos) < 8
+        );
+        if (nearScaffold) {
+          buildings.addProgress(nearScaffold, 0.25);
+          alignment.shift(0.04, 'Assigned Builder');
+          bus.emit('toast:show', { message: 'Villager assigned to build!', durationMs: 1600 });
+        } else if (pos.distanceTo(playerVillage.totemPos) < 8) {
+          gameState.addBelief(12);
+          bus.emit('toast:show', { message: 'Villager inspired to worship! +12 Belief', durationMs: 1600 });
+        }
+      }
+    }
+    return rawVel;
+  }
+
+  function tryPickupVillager(worldPos: THREE.Vector3): PhysicsProp | null {
+    if (!influenceRing.isInside(worldPos)) return null;
+    for (const v of playerVillage.villagers.agents) {
+      if (v.position.distanceTo(worldPos) < 2.6) {
+        return props.spawnVillagerProp(v.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+      }
+    }
+    return null;
+  }
 
   const xrManager = new XRSessionManager(renderer, enterVrBtn, (inVR) => {
     overlayEl.style.display = inVR ? 'none' : 'flex';
@@ -149,6 +211,9 @@ async function bootstrap(): Promise<void> {
         creature.unleash();
       },
       getCreaturePos: () => creature.position.clone(),
+      onPropGrabbed: handlePropGrabbed,
+      onAdjustReleaseVelocity: adjustReleaseVelocity,
+      tryPickupVillager,
     }
   );
 
@@ -218,11 +283,17 @@ async function bootstrap(): Promise<void> {
   let drawingHand: 'left' | 'right' | null = null;
 
   function processVRHand(hand: HandState): boolean {
-    if (!hand.tracked) return false;
     const side = hand.handedness;
+    if (!hand.tracked) {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
+      return false;
+    }
+
     const isGrasping = hand.isPinching || hand.isGrabbing;
     const wasGrasping = hand.wasPinching || hand.wasGrabbing;
-    const grabRadius = Math.max(2.2, godRig.scale.x * 0.35);
+    const grabRadius = Math.max(2.4, godRig.scale.x * 0.38);
+    const rayMaxDist = Math.max(22, godRig.scale.x * 4.5);
 
     // 1. Direct Creature Petting / Slapping with open palm
     if (hand.isOpenPalm && !heldProps[side]) {
@@ -231,6 +302,8 @@ async function bootstrap(): Promise<void> {
 
     // 2. 3D Miracle Gesture Drawing when pointing with index finger
     if (hand.isPointing && !heldProps[side] && !grabbingTotem[side]) {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
       if (drawingHand === null) {
         drawingHand = side;
         gestureRecognizer.beginStroke(hand.indexTipWorldPos);
@@ -243,18 +316,19 @@ async function bootstrap(): Promise<void> {
       const match = gestureRecognizer.endStroke(camera);
       if (match) {
         const castPos = hand.indexTipWorldPos.clone();
-        const throwVel = match.type === 'fireball' ? hand.velocityWorld.clone().multiplyScalar(1.4) : null;
+        const throwVel = match.type === 'fireball' ? hand.peakVelocityWorld.clone().multiplyScalar(1.4) : null;
         miracleManager.tryCast(match.type, castPos, throwVel, playerVillage, rivalVillage);
       }
     }
 
     // 3. Holding the Creature Leash in VR
     if (creature.leashHeldByHand === side) {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
       if (isGrasping) {
         creature.updateHeldLeash(hand.pinchWorldPos);
         return true;
       } else {
-        // Release on Creature itself -> unleash; release anywhere else -> tie leash there!
         if (hand.pinchWorldPos.distanceTo(creature.interactionCenter) < 4.5) {
           creature.unleash();
         } else {
@@ -266,6 +340,8 @@ async function bootstrap(): Promise<void> {
 
     // 4. Grabbing the Player Village Totem to dial worship
     if (grabbingTotem[side]) {
+      feedback.setHover(side, playerVillage.totemPos, 2.2, 'special', elapsedSec);
+      feedback.setAimRay(side, null, null);
       if (isGrasping) {
         playerVillage.adjustTotemByWorldY(hand.pinchWorldPos.y);
         return true;
@@ -274,36 +350,81 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 5. Holding a Physics Prop
+    // 5. Holding a Physics Prop (with smooth magnetic follow + peak-velocity throw + arc preview!)
     const held = heldProps[side];
     if (held) {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
       if (isGrasping) {
-        physics.moveGrabbedProp(held, hand.pinchWorldPos);
+        physics.moveGrabbedProp(held, hand.pinchWorldPos, 0.42);
+        const previewVel = adjustReleaseVelocity(held, hand.peakVelocityWorld.clone().multiplyScalar(1.4));
+        feedback.setThrowArc(held.mesh.position, previewVel);
         return true;
       } else {
-        physics.releaseProp(held, hand.velocityWorld.clone().multiplyScalar(1.35));
+        const releaseVel = adjustReleaseVelocity(held, hand.peakVelocityWorld.clone().multiplyScalar(1.4));
+        physics.releaseProp(held, releaseVel);
+        feedback.setThrowArc(null, null);
         heldProps[side] = null;
         return false;
       }
     }
 
-    // 6. Starting a new grab (Creature Leash -> Totem -> Physics Prop)
+    // 6. Hover detection (Direct proximity first, then Telekinetic Distant Ray-Grab!)
+    const totemCenter = playerVillage.totemPos.clone().add(new THREE.Vector3(0, 2.5, 0));
+    const nearLeash = hand.pinchWorldPos.distanceTo(creature.collarWorldPos) < grabRadius + 2.8;
+    const nearTotem = hand.pinchWorldPos.distanceTo(totemCenter) < grabRadius + 1.5;
+
+    let hoverProp: PhysicsProp | null = null;
+    let usedRay = false;
+    if (!nearLeash && !nearTotem) {
+      hoverProp = physics.findNearestGrabbable(hand.pinchWorldPos, grabRadius);
+      if (!hoverProp) {
+        hoverProp = physics.findGrabbableAlongRay(hand.pinchWorldPos, hand.aimDirectionWorld, rayMaxDist, 2.2);
+        usedRay = hoverProp !== null;
+      }
+    }
+
+    // Render diegetic hover ring & subtle telekinetic aim ray
+    if (nearLeash) {
+      feedback.setHover(side, creature.position, 3.2, 'special', elapsedSec);
+      feedback.setAimRay(side, null, null);
+    } else if (nearTotem) {
+      feedback.setHover(side, playerVillage.totemPos, 2.4, 'special', elapsedSec);
+      feedback.setAimRay(side, null, null);
+    } else if (hoverProp) {
+      const allowed = influenceRing.isInside(hoverProp.mesh.position);
+      feedback.setHover(side, hoverProp.mesh.position, hoverProp.radius, allowed ? 'prop' : 'blocked', elapsedSec);
+      if (usedRay) {
+        feedback.setAimRay(side, hand.pinchWorldPos, hoverProp.mesh.position, palette.ringColor);
+      } else {
+        feedback.setAimRay(side, null, null);
+      }
+    } else {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
+    }
+
+    // 7. Starting a new grab (Creature Leash -> Totem -> Prop -> Villager)
     if (isGrasping && !wasGrasping) {
-      if (hand.pinchWorldPos.distanceTo(creature.collarWorldPos) < grabRadius + 2.8) {
+      if (nearLeash) {
         creature.grabLeash(side, hand.pinchWorldPos);
         return true;
       }
-
-      const totemCenter = playerVillage.totemPos.clone().add(new THREE.Vector3(0, 2.5, 0));
-      if (hand.pinchWorldPos.distanceTo(totemCenter) < grabRadius + 1.5) {
+      if (nearTotem) {
         grabbingTotem[side] = true;
         return true;
       }
-
-      const prop = physics.findNearestGrabbable(hand.pinchWorldPos, grabRadius);
-      if (prop && influenceRing.isInside(prop.mesh.position)) {
-        physics.grabProp(prop, side);
-        heldProps[side] = prop;
+      if (hoverProp && influenceRing.isInside(hoverProp.mesh.position)) {
+        const justUprooted = physics.grabProp(hoverProp, side);
+        handlePropGrabbed(hoverProp, justUprooted);
+        heldProps[side] = hoverProp;
+        return true;
+      }
+      const villagerProp = tryPickupVillager(hand.pinchWorldPos);
+      if (villagerProp) {
+        physics.grabProp(villagerProp, side);
+        handlePropGrabbed(villagerProp, false);
+        heldProps[side] = villagerProp;
         return true;
       }
     }
@@ -325,17 +446,36 @@ async function bootstrap(): Promise<void> {
     // XR Hand Tracking & God Locomotion
     handTracker.update(renderer, frame, dt, palette);
     if (xrManager.inVR) {
+      feedback.updateDesktopCursor(desktopSim.cursorWorldPos, false, elapsedSec, palette);
+      feedback.setHover('desktop', null, 1, 'none', elapsedSec);
       const leftBusy = processVRHand(handTracker.left);
       const rightBusy = processVRHand(handTracker.right);
       locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy);
     } else {
       desktopSim.update(dt, false);
+      feedback.updateDesktopCursor(desktopSim.cursorWorldPos, true, elapsedSec, palette);
+      const heldDesktop = desktopSim.getHeldProp();
+      if (heldDesktop) {
+        feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+        const previewVel = adjustReleaseVelocity(heldDesktop, desktopSim.getThrowVelocity());
+        feedback.setThrowArc(heldDesktop.mesh.position, previewVel);
+      } else {
+        feedback.setThrowArc(null, null);
+        const hover = physics.findNearestGrabbable(desktopSim.cursorWorldPos, 3.2);
+        if (hover) {
+          const allowed = influenceRing.isInside(hover.mesh.position);
+          feedback.setHover('desktop', hover.mesh.position, hover.radius, allowed ? 'prop' : 'blocked', elapsedSec);
+        } else {
+          feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+        }
+      }
     }
 
     // Simulation step
     physics.step(dt);
     miracleEffects.checkGranaryDeposits(playerVillage);
     buildings.update(dt, elapsedSec);
+    feedback.update(dt);
     playerVillage.update(dt, elapsedSec, gameState, palette);
     rivalVillage.update(dt, elapsedSec, gameState, palette);
     miracleEffects.update(dt);
