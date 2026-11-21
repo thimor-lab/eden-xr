@@ -28,6 +28,8 @@ export class VRTutorialPanel {
   private lastSignature = '';
   private pokeCooldown = 0;
   private initializedPlacement = false;
+  private readonly lookMat = new THREE.Matrix4();
+  private readonly upVec = new THREE.Vector3(0, 1, 0);
 
   constructor(parent: THREE.Object3D) {
     if (typeof document !== 'undefined') {
@@ -137,9 +139,13 @@ export class VRTutorialPanel {
         .addScaledVector(horizFwd, 0.88)
         .addScaledVector(rightDir, -0.22)
         .add(new THREE.Vector3(0, 0.08, 0));
-      this.group.lookAt(headLocalPos);
       this.initializedPlacement = true;
     }
+
+    // Orient +Z front face directly toward headLocalPos in parent (godRig) local space
+    this.lookMat.lookAt(headLocalPos, this.group.position, this.upVec);
+    this.group.quaternion.setFromRotationMatrix(this.lookMat);
+    this.group.updateMatrix();
 
     this.redraw(progress, navMode);
 

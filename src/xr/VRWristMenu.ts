@@ -201,6 +201,8 @@ export class VRWristMenu {
   private pokeCooldown = 0;
   private smoothedPos = new THREE.Vector3();
   private hasSmoothedPos = false;
+  private readonly lookMat = new THREE.Matrix4();
+  private readonly upVec = new THREE.Vector3(0, 1, 0);
 
   constructor(parent: THREE.Object3D) {
     // Backplate panel
@@ -289,7 +291,9 @@ export class VRWristMenu {
       }
     }
     this.group.position.copy(this.smoothedPos);
-    this.group.lookAt(headLocalPos);
+    // Orient +Z front face directly toward headLocalPos in parent (godRig) local space
+    this.lookMat.lookAt(headLocalPos, this.group.position, this.upVec);
+    this.group.quaternion.setFromRotationMatrix(this.lookMat);
     this.group.scale.setScalar(this.openAmount);
 
     // Check right index fingertip (or left if pinned) poking any 3D button
