@@ -36,6 +36,7 @@ export class SessionLogger {
   private readonly maxEntries: number;
 
   public errorCount = 0;
+  public warnCount = 0;
   public vrEntered = false;
   public maxLeftJoints = 0;
   public maxRightJoints = 0;
@@ -58,12 +59,18 @@ export class SessionLogger {
     }
     if (level === 'error') {
       this.errorCount++;
+    } else if (level === 'warn') {
+      this.warnCount++;
     }
     this.persist();
   }
 
   info(tag: string, msg: string, data?: Record<string, unknown>): void {
     this.log('info', tag, msg, data);
+  }
+
+  warn(tag: string, msg: string, data?: Record<string, unknown>): void {
+    this.log('warn', tag, msg, data);
   }
 
   event(tag: string, msg: string, data?: Record<string, unknown>): void {

@@ -35,6 +35,7 @@ async function bootstrap(): Promise<void> {
   const logsTextEl = document.getElementById('logs-text') as HTMLTextAreaElement;
   const copyLogsBtn = document.getElementById('copy-logs-btn') as HTMLButtonElement;
   const downloadLogsBtn = document.getElementById('download-logs-btn') as HTMLButtonElement;
+  const githubIssueBtn = document.getElementById('github-issue-btn') as HTMLButtonElement;
   const clearLogsBtn = document.getElementById('clear-logs-btn') as HTMLButtonElement;
   const closeLogsBtn = document.getElementById('close-logs-btn') as HTMLButtonElement;
   const overlayEl = document.getElementById('overlay')!;
@@ -377,6 +378,63 @@ async function bootstrap(): Promise<void> {
     a.click();
     URL.revokeObjectURL(url);
   });
+  githubIssueBtn.addEventListener('click', () => {
+    const exp = logger.exportObject();
+    const recent = exp.entries.slice(-30);
+    const title = encodeURIComponent(
+      `[QA Session] ${exp.summary.vrEntered ? 'Android XR' : 'Desktop'} (${exp.summary.errorCount} err, L:${exp.summary.maxLeftJoints}j R:${exp.summary.maxRightJoints}j)`
+    );
+    const bodyText = `## Session Summary\n\`\`\`json\n${JSON.stringify(exp.summary, null, 2)}\n\`\`\`\n\n## Recent Telemetry & Errors\n\`\`\`json\n${JSON.stringify(recent, null, 2)}\n\`\`\``;
+    const body = encodeURIComponent(bodyText.slice(0, 5500));
+    window.open(`https://github.com/thimor-lab/eden-xr/issues/new?title=${title}&body=${body}`, '_blank');
+  });
+
+  // Expose QA inspection bridge for automated Playwright E2E self-testing
+  let lastHeadLocal = new THREE.Vector3(0, 1.5, 0);
+  (window as unknown as Record<string, unknown>).__EDEN_QA__ = {
+    getState: () => {
+      const tutFront = new THREE.Vector3(0, 0, 1).applyQuaternion(tutorialPanel.group.quaternion).normalize();
+      const tutToHead = lastHeadLocal.clone().sub(tutorialPanel.group.position).normalize();
+      const wristFront = new THREE.Vector3(0, 0, 1).applyQuaternion(wristMenu.group.quaternion).normalize();
+      const wristToHead = lastHeadLocal.clone().sub(wristMenu.group.position).normalize();
+      return {
+        inVR: xrManager.inVR,
+        cameraPos: camera.position.toArray(),
+        godRigPos: godRig.position.toArray(),
+        godRigScale: godRig.scale.x,
+        creaturePos: creature.position.toArray(),
+        creatureLeashed: Boolean(creature.leashTarget),
+        prayerPower: gameState.prayerPower,
+        belief: gameState.playerBelief,
+        villageFood: gameState.villageFood,
+        villageWood: gameState.villageWood,
+        alignment: alignment.alignment,
+        leftHand: {
+          tracked: handTracker.left.tracked,
+          joints: handTracker.left.jointCount,
+          palmUp: handTracker.left.isPalmFacingCamera,
+          dot: handTracker.left.palmDotHead,
+        },
+        rightHand: {
+          tracked: handTracker.right.tracked,
+          joints: handTracker.right.jointCount,
+        },
+        tutorial: {
+          visible: tutorialPanel.group.visible,
+          facingDot: Number(tutFront.dot(tutToHead).toFixed(3)),
+        },
+        wristMenu: {
+          visible: wristMenu.group.visible,
+          isOpen: wristMenu.isOpen,
+          pinned: wristMenu.pinned,
+          armedAction: wristMenu.armedAction,
+          facingDot: Number(wristFront.dot(wristToHead).toFixed(3)),
+        },
+        navMode: locomotion.navMode,
+        logs: logger.exportObject(),
+      };
+    },
+  };
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -632,6 +690,7 @@ async function bootstrap(): Promise<void> {
         feedback.setHover('desktop', null, 1, 'none', elapsedSec);
 
         const headPos = headLocalPos ?? new THREE.Vector3(0, 1.5, 0);
+        lastHeadLocal.copy(headPos);
         tutorialProgress.moved = tutorialProgress.moved || locomotion.hasMovedByNav;
         tutorialProgress.zoomed = tutorialProgress.zoomed || locomotion.hasZoomedByTwoHand;
         tutorialProgress.openedMenu = tutorialProgress.openedMenu || wristMenu.isOpen;

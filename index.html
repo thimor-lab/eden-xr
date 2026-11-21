@@ -63,6 +63,7 @@
       .stat-row {
         display: flex;
         justify-content: space-between;
+        gap: 12px;
         font-size: 0.82rem;
         margin-top: 6px;
       }
@@ -189,9 +190,10 @@
     <div id="logs-modal" style="display:none; position:fixed; inset:20px; z-index:40; background:rgba(8,14,22,0.96); border:1px solid rgba(255,224,150,0.45); border-radius:14px; padding:16px; flex-direction:column; gap:10px; pointer-events:auto;">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
         <strong id="logs-summary" style="color:#ffd98a; font-size:0.95rem;">Session QA Logs</strong>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button id="copy-logs-btn" class="secondary-btn">Copy JSON</button>
           <button id="download-logs-btn" class="secondary-btn">Download .json</button>
+          <button id="github-issue-btn" class="secondary-btn">Submit GitHub QA Issue</button>
           <button id="clear-logs-btn" class="secondary-btn">Clear</button>
           <button id="close-logs-btn" class="secondary-btn">Close</button>
         </div>

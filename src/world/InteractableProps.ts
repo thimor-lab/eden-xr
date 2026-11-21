@@ -46,18 +46,18 @@ export class InteractableProps {
       this.spawnRock(new THREE.Vector3(x, y + 0.9, z), 0.7 + rand() * 0.7);
     }
 
-    // Starter wood & food piles near player village
+    // Starter wood & food piles near player village (kept clear of Granary auto-deposit zone)
     for (let i = 0; i < 4; i++) {
-      const angle = (i / 4) * Math.PI * 2 + 0.4;
-      const x = PLAYER_VILLAGE_POS.x + Math.cos(angle) * 10.5;
-      const z = PLAYER_VILLAGE_POS.z + Math.sin(angle) * 10.5;
+      const angle = 2.0 + (i / 4) * 2.2;
+      const x = PLAYER_VILLAGE_POS.x + Math.cos(angle) * 12.5;
+      const z = PLAYER_VILLAGE_POS.z + Math.sin(angle) * 12.5;
       const y = this.terrain.getHeightAt(x, z);
       this.spawnWood(new THREE.Vector3(x, y + 0.7, z));
     }
     for (let i = 0; i < 3; i++) {
-      const angle = (i / 3) * Math.PI * 2 + 1.1;
-      const x = PLAYER_VILLAGE_POS.x + Math.cos(angle) * 9;
-      const z = PLAYER_VILLAGE_POS.z + Math.sin(angle) * 9;
+      const angle = 2.4 + (i / 3) * 1.8;
+      const x = PLAYER_VILLAGE_POS.x + Math.cos(angle) * 10.5;
+      const z = PLAYER_VILLAGE_POS.z + Math.sin(angle) * 10.5;
       const y = this.terrain.getHeightAt(x, z);
       this.spawnFood(new THREE.Vector3(x, y + 0.7, z));
     }

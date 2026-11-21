@@ -54,17 +54,18 @@ export class OceanShader {
           float shore = smoothstep(140.0, 48.0, dist);
           vec3 base = mix(uDeepColor, uShallowColor, shore);
 
-          // Approximate normal from wave height for sparkle
-          vec3 N = normalize(vec3(dFdx(vWave) * 4.5, 1.0, dFdy(vWave) * 4.5));
+          // Approximate normal from wave height for sparkle, attenuated at distance to avoid moire banding
+          float distFade = smoothstep(260.0, 80.0, dist);
+          vec3 N = normalize(vec3(dFdx(vWave) * 3.0 * distFade, 1.0, dFdy(vWave) * 3.0 * distFade));
           vec3 V = normalize(cameraPosition - vWorldPos);
           vec3 H = normalize(uSunDir + V);
-          float spec = pow(max(dot(N, H), 0.0), 64.0) * 0.7;
-          float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.35;
+          float spec = pow(max(dot(N, H), 0.0), 64.0) * 0.65 * distFade;
+          float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25 * distFade;
 
-          // Subtle crest highlights
-          float foam = smoothstep(0.18, 0.3, vWave) * 0.25;
+          // Subtle crest highlights near island only
+          float foam = smoothstep(0.18, 0.3, vWave) * 0.2 * distFade;
           vec3 color = base + uSunColor * (spec + fresnel) + vec3(foam);
-          float alpha = mix(0.92, 0.78, shore);
+          float alpha = mix(0.95, 0.78, shore);
           gl_FragColor = vec4(color, alpha);
         }
       `,
