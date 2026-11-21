@@ -18,6 +18,7 @@ import { DesktopSimulator } from './xr/DesktopSimulator';
 import { GestureRecognizer } from './xr/GestureRecognizer';
 import { HandState, HandTracker } from './xr/HandTracker';
 import { InteractionFeedback } from './xr/InteractionFeedback';
+import { VRWristMenu, WristMenuAction } from './xr/VRWristMenu';
 import { WorldLocomotion } from './xr/WorldLocomotion';
 import { XRSessionManager } from './xr/XRSessionManager';
 
@@ -117,6 +118,36 @@ async function bootstrap(): Promise<void> {
   godRig.scale.setScalar(1);
   const gestureRecognizer = new GestureRecognizer(scene);
   const feedback = new InteractionFeedback(scene, terrain);
+  const wristMenu = new VRWristMenu(godRig);
+  const terrainRaycaster = new THREE.Raycaster();
+
+  function raycastTerrainWorld(origin: THREE.Vector3, dir: THREE.Vector3): THREE.Vector3 | null {
+    terrainRaycaster.set(origin, dir.clone().normalize());
+    const hits = terrainRaycaster.intersectObject(terrain.mesh, false);
+    if (hits.length > 0) return hits[0].point;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -2);
+    const out = new THREE.Vector3();
+    return terrainRaycaster.ray.intersectPlane(plane, out) ? out : null;
+  }
+
+  function handleWristMenuAction(action: WristMenuAction): void {
+    audio.playGrab(camera.position);
+    if (action === 'jump_home') {
+      locomotion.swoopTo(PLAYER_VILLAGE_POS, 7.5);
+    } else if (action === 'jump_rival') {
+      locomotion.swoopTo(RIVAL_VILLAGE_POS, 8.0);
+    } else if (action === 'jump_creature') {
+      locomotion.swoopTo(creature.position, 5.5);
+    } else if (action === 'unleash') {
+      creature.unleash();
+    } else if (action === 'toggle_nav') {
+      const mode = locomotion.toggleNavMode();
+      bus.emit('toast:show', {
+        message: mode === 'world-pull' ? 'Nav: Diorama World-Pull' : 'Nav: Point-to-Glide',
+        durationMs: 1800,
+      });
+    }
+  }
 
   function handlePropGrabbed(prop: PhysicsProp, justUprooted: boolean): void {
     if (justUprooted) {
@@ -307,6 +338,44 @@ async function bootstrap(): Promise<void> {
     const grabRadius = Math.max(2.4, godRig.scale.x * 0.38);
     const rayMaxDist = Math.max(22, godRig.scale.x * 4.5);
 
+    // 0. If a Miracle or Leash is armed from the Left-Palm Wrist Menu, project ground reticle on right hand!
+    if (side === 'right' && wristMenu.armedAction && !wristMenu.isOpen) {
+      const aimHit = raycastTerrainWorld(hand.pinchWorldPos, hand.aimDirectionWorld);
+      if (aimHit) {
+        const isLeash = wristMenu.armedAction === 'leash';
+        const allowed = isLeash || wristMenu.armedAction === 'fireball' || influenceRing.isInside(aimHit);
+        feedback.setHover(side, aimHit, isLeash ? 2.4 : 2.0, allowed ? 'special' : 'blocked', elapsedSec);
+        feedback.setAimRay(
+          side,
+          hand.pinchWorldPos,
+          aimHit,
+          new THREE.Color(isLeash ? 0x66f0ff : 0xffe488)
+        );
+
+        if (hand.isPinching && !hand.wasPinching) {
+          if (isLeash) {
+            creature.tieLeashTo(aimHit, playerVillage, rivalVillage);
+          } else {
+            const vel =
+              wristMenu.armedAction === 'fireball'
+                ? aimHit.clone().sub(hand.pinchWorldPos).normalize().multiplyScalar(28)
+                : null;
+            miracleManager.tryCast(
+              wristMenu.armedAction,
+              wristMenu.armedAction === 'fireball' ? hand.pinchWorldPos : aimHit,
+              vel,
+              playerVillage,
+              rivalVillage
+            );
+          }
+          wristMenu.armedAction = null;
+          feedback.setAimRay(side, null, null);
+          return true;
+        }
+        return false;
+      }
+    }
+
     // 1. Direct Creature Petting / Slapping with open palm
     if (hand.isOpenPalm && !heldProps[side]) {
       creature.checkHandConditioning(hand.palmWorldPos, hand.velocityWorld.length(), elapsedSec);
@@ -456,13 +525,21 @@ async function bootstrap(): Promise<void> {
     alignment.samplePalette(palette);
 
     // XR Hand Tracking & God Locomotion
-    handTracker.update(renderer, frame, dt, palette);
+    const headLocalPos = xrManager.inVR ? camera.position : undefined;
+    handTracker.update(renderer, frame, dt, palette, headLocalPos);
     if (xrManager.inVR) {
       feedback.updateDesktopCursor(desktopSim.cursorWorldPos, false, elapsedSec, palette);
       feedback.setHover('desktop', null, 1, 'none', elapsedSec);
-      const leftBusy = processVRHand(handTracker.left);
-      const rightBusy = processVRHand(handTracker.right);
-      locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy);
+      const pokingMenu = wristMenu.update(
+        handTracker.left,
+        handTracker.right,
+        camera.position,
+        dt,
+        handleWristMenuAction
+      );
+      const leftBusy = wristMenu.isOpen || processVRHand(handTracker.left);
+      const rightBusy = pokingMenu || processVRHand(handTracker.right);
+      locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy, dt);
     } else {
       desktopSim.update(dt, false);
       feedback.updateDesktopCursor(desktopSim.cursorWorldPos, true, elapsedSec, palette);

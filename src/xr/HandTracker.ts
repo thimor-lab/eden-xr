@@ -5,10 +5,14 @@ import { GodHandMesh } from './GodHandMesh';
 export interface HandState {
   handedness: 'left' | 'right';
   tracked: boolean;
+  palmLocalPos: THREE.Vector3;
+  indexTipLocalPos: THREE.Vector3;
   palmWorldPos: THREE.Vector3;
   pinchWorldPos: THREE.Vector3;
   indexTipWorldPos: THREE.Vector3;
   aimDirectionWorld: THREE.Vector3;
+  palmNormalLocal: THREE.Vector3;
+  isPalmFacingCamera: boolean;
   velocityWorld: THREE.Vector3;
   peakVelocityWorld: THREE.Vector3;
   isPinching: boolean;
@@ -70,10 +74,14 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
   return {
     handedness,
     tracked: false,
+    palmLocalPos: new THREE.Vector3(),
+    indexTipLocalPos: new THREE.Vector3(),
     palmWorldPos: new THREE.Vector3(),
     pinchWorldPos: new THREE.Vector3(),
     indexTipWorldPos: new THREE.Vector3(),
     aimDirectionWorld: new THREE.Vector3(0, -1, 0),
+    palmNormalLocal: new THREE.Vector3(0, 1, 0),
+    isPalmFacingCamera: false,
     velocityWorld: new THREE.Vector3(),
     peakVelocityWorld: new THREE.Vector3(),
     isPinching: false,
@@ -108,7 +116,8 @@ export class HandTracker {
     renderer: THREE.WebGLRenderer,
     frame: XRFrame | undefined,
     dt: number,
-    palette: AlignmentPalette
+    palette: AlignmentPalette,
+    headLocalPos?: THREE.Vector3
   ): void {
     const session = renderer.xr.getSession();
     const refSpace = renderer.xr.getReferenceSpace();
@@ -128,7 +137,7 @@ export class HandTracker {
       const visual = source.handedness === 'left' ? this.leftMesh : this.rightMesh;
 
       if (source.hand) {
-        this.readXRHand(source.hand, frame, refSpace, state, visual, dt, palette);
+        this.readXRHand(source.hand, frame, refSpace, state, visual, dt, palette, headLocalPos);
       } else if (source.gripSpace) {
         // Fallback if user has XR controllers instead of bare hands
         const pose = frame.getPose(source.gripSpace, refSpace);
@@ -168,6 +177,7 @@ export class HandTracker {
     state.isGrabbing = false;
     state.isPointing = false;
     state.isOpenPalm = false;
+    state.isPalmFacingCamera = false;
   }
 
   private readXRHand(
@@ -177,7 +187,8 @@ export class HandTracker {
     state: HandState,
     visual: GodHandMesh,
     dt: number,
-    palette: AlignmentPalette
+    palette: AlignmentPalette,
+    headLocalPos?: THREE.Vector3
   ): void {
     const localJoints: THREE.Vector3[] = [];
     const map = new Map<XRHandJoint, THREE.Vector3>();
@@ -206,7 +217,27 @@ export class HandTracker {
     if (!palmLocal || !thumbTip || !indexTip) return;
 
     state.tracked = true;
+    state.palmLocalPos.copy(palmLocal);
+    state.indexTipLocalPos.copy(indexTip);
     const pinchLocal = thumbTip.clone().lerp(indexTip, 0.5);
+
+    // Compute palm normal in rig-local space from wrist -> index-metacarpal x pinky-metacarpal
+    const wristLocal = map.get('wrist') ?? palmLocal;
+    const indexMeta = map.get('index-finger-metacarpal');
+    const pinkyMeta = map.get('pinky-finger-metacarpal');
+    if (indexMeta && pinkyMeta) {
+      const v1 = indexMeta.clone().sub(wristLocal);
+      const v2 = pinkyMeta.clone().sub(wristLocal);
+      const normal = state.handedness === 'left' ? v1.cross(v2) : v2.cross(v1);
+      if (normal.lengthSq() > 1e-6) {
+        state.palmNormalLocal.copy(normal.normalize());
+      }
+    }
+
+    if (headLocalPos) {
+      const toHead = headLocalPos.clone().sub(palmLocal).normalize();
+      state.isPalmFacingCamera = state.palmNormalLocal.dot(toHead) > 0.52;
+    }
 
     // Transform from rig-local XR space into scaled world space
     state.palmWorldPos.copy(palmLocal).applyMatrix4(this.godRig.matrixWorld);
@@ -214,7 +245,6 @@ export class HandTracker {
     state.indexTipWorldPos.copy(indexTip).applyMatrix4(this.godRig.matrixWorld);
 
     // Compute world-space aiming direction from wrist through palm/index
-    const wristLocal = map.get('wrist') ?? palmLocal;
     const wristWorld = wristLocal.clone().applyMatrix4(this.godRig.matrixWorld);
     const dir = state.indexTipWorldPos.clone().sub(wristWorld);
     if (dir.lengthSq() > 1e-5) {
