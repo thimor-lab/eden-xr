@@ -353,16 +353,17 @@ async function bootstrap(): Promise<void> {
         );
 
         if (hand.isPinching && !hand.wasPinching) {
-          if (isLeash) {
+          const armed = wristMenu.armedAction;
+          if (armed === 'leash') {
             creature.tieLeashTo(aimHit, playerVillage, rivalVillage);
-          } else {
+          } else if (armed) {
             const vel =
-              wristMenu.armedAction === 'fireball'
+              armed === 'fireball'
                 ? aimHit.clone().sub(hand.pinchWorldPos).normalize().multiplyScalar(28)
                 : null;
             miracleManager.tryCast(
-              wristMenu.armedAction,
-              wristMenu.armedAction === 'fireball' ? hand.pinchWorldPos : aimHit,
+              armed,
+              armed === 'fireball' ? hand.pinchWorldPos : aimHit,
               vel,
               playerVillage,
               rivalVillage
