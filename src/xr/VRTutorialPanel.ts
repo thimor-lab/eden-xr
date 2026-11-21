@@ -213,13 +213,13 @@ export class VRTutorialPanel {
     const steps: { done: boolean; title: string; desc: string }[] = [
       {
         done: p.moved,
-        title: '1. Move Around the Island',
-        desc: 'Pinch or make a fist in empty air & PULL (flick to glide!)',
+        title: '1. Move Around (FIST)',
+        desc: 'Close 1 hand into a FIST & pull horizontally (or use Swoop Go in Menu)',
       },
       {
         done: p.zoomed,
-        title: '2. Zoom & Rotate World',
-        desc: 'Grab empty air with BOTH hands: spread/squeeze to zoom, twist to turn',
+        title: '2. Zoom & Turntable Rotate (2 FISTS)',
+        desc: 'Close BOTH hands into FISTS: spread/squeeze to zoom, twist to rotate',
       },
       {
         done: p.openedMenu,
@@ -228,8 +228,8 @@ export class VRTutorialPanel {
       },
       {
         done: p.interacted,
-        title: '4. Grab, Leash & Cast Miracles',
-        desc: 'Pinch rocks/trees to throw · Poke Miracles/Leash in Menu · Pet/Slap Creature',
+        title: '4. Grab, Leash & Cast (PINCH)',
+        desc: 'PINCH (thumb+index) rocks/trees · Poke Miracles/Swoop in Menu',
       },
     ];
 

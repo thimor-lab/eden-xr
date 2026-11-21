@@ -51,6 +51,8 @@ describe('VR Wrist Menu & Locomotion', () => {
       peakVelocityWorld: new THREE.Vector3(),
       isPinching: false,
       wasPinching: false,
+      isGripFist: false,
+      wasGripFist: false,
       isGrabbing: false,
       wasGrabbing: false,
       isPointing: false,
@@ -95,6 +97,8 @@ describe('VR Wrist Menu & Locomotion', () => {
       peakVelocityWorld: new THREE.Vector3(),
       isPinching: false,
       wasPinching: false,
+      isGripFist: false,
+      wasGripFist: false,
       isGrabbing: false,
       wasGrabbing: false,
       isPointing: false,
@@ -122,5 +126,96 @@ describe('VR Wrist Menu & Locomotion', () => {
     const wristFront = new THREE.Vector3(0, 0, 1).applyQuaternion(wrist.group.quaternion).normalize();
     const wristToHead = headLocal.clone().sub(wrist.group.position).normalize();
     expect(wristFront.dot(wristToHead)).toBeGreaterThan(0.99);
+  });
+
+  it('keeps 1-hand fist pull strictly horizontal with zero accidental vertical drift', () => {
+    const rig = new THREE.Group();
+    const terrain = new IslandTerrain();
+    const nav = new WorldLocomotion(rig, terrain);
+    const startY = rig.position.y;
+    const startX = rig.position.x;
+
+    const makeFist = (x: number, y: number, z: number) => ({
+      handedness: 'right' as const,
+      tracked: true,
+      jointCount: 25,
+      palmLocalPos: new THREE.Vector3(x, y, z),
+      indexTipLocalPos: new THREE.Vector3(x, y, z),
+      palmWorldPos: new THREE.Vector3(),
+      pinchWorldPos: new THREE.Vector3(),
+      indexTipWorldPos: new THREE.Vector3(),
+      aimDirectionWorld: new THREE.Vector3(0, 0, -1),
+      palmNormalLocal: new THREE.Vector3(0, 1, 0),
+      palmDotHead: 0,
+      isPalmFacingCamera: false,
+      velocityWorld: new THREE.Vector3(),
+      peakVelocityWorld: new THREE.Vector3(),
+      isPinching: false,
+      wasPinching: false,
+      isGripFist: true,
+      wasGripFist: true,
+      isGrabbing: true,
+      wasGrabbing: true,
+      isPointing: false,
+      wasPointing: false,
+      isOpenPalm: false,
+    });
+    const idleLeft = { ...makeFist(0, 1, 0), handedness: 'left' as const, isGripFist: false, isGrabbing: false };
+
+    // Grab and pull right + violently down in Y
+    nav.update(idleLeft, makeFist(0.2, 1.3, -0.3), false, false, 1 / 60);
+    nav.update(idleLeft, makeFist(0.45, 0.8, -0.3), false, false, 1 / 60);
+
+    expect(rig.position.x).toBeLessThan(startX - 1.5); // Pulling hand +X moves world +X (rig -X)
+    expect(rig.position.y).toBeCloseTo(startY, 3); // Zero accidental vertical drift!
+  });
+
+  it('pivots 2-hand zoom and turntable twist around the hand midpoint without throwing the player away', () => {
+    const rig = new THREE.Group();
+    const terrain = new IslandTerrain();
+    const nav = new WorldLocomotion(rig, terrain);
+
+    const makeFist = (side: 'left' | 'right', x: number, y: number, z: number) => ({
+      handedness: side,
+      tracked: true,
+      jointCount: 25,
+      palmLocalPos: new THREE.Vector3(x, y, z),
+      indexTipLocalPos: new THREE.Vector3(x, y, z),
+      palmWorldPos: new THREE.Vector3(),
+      pinchWorldPos: new THREE.Vector3(),
+      indexTipWorldPos: new THREE.Vector3(),
+      aimDirectionWorld: new THREE.Vector3(0, 0, -1),
+      palmNormalLocal: new THREE.Vector3(0, 1, 0),
+      palmDotHead: 0,
+      isPalmFacingCamera: false,
+      velocityWorld: new THREE.Vector3(),
+      peakVelocityWorld: new THREE.Vector3(),
+      isPinching: false,
+      wasPinching: false,
+      isGripFist: true,
+      wasGripFist: true,
+      isGrabbing: true,
+      wasGrabbing: true,
+      isPointing: false,
+      wasPointing: false,
+      isOpenPalm: false,
+    });
+
+    const midLocal = new THREE.Vector3(0, 1.2, -0.45);
+    rig.updateMatrixWorld(true);
+    const pivotWorldBefore = midLocal.clone().applyMatrix4(rig.matrixWorld);
+
+    // Frame 1: start two-hand fist grab at width 0.30m
+    nav.update(makeFist('left', -0.15, 1.2, -0.45), makeFist('right', 0.15, 1.2, -0.45), false, false, 1 / 60);
+    // Frame 2: spread hands to 0.36m AND twist slightly around the exact same midpoint
+    nav.update(makeFist('left', -0.175, 1.2, -0.48), makeFist('right', 0.175, 1.2, -0.42), false, false, 1 / 60);
+
+    rig.updateMatrixWorld(true);
+    const pivotWorldAfter = midLocal.clone().applyMatrix4(rig.matrixWorld);
+
+    // Midpoint stays pinned in world space while scale & yaw change cleanly!
+    expect(pivotWorldAfter.distanceTo(pivotWorldBefore)).toBeLessThan(0.1);
+    expect(rig.scale.x).toBeLessThan(8.0); // Spread = zoomed in
+    expect(Math.abs(rig.rotation.y)).toBeGreaterThan(0.01); // Twisted cleanly
   });
 });

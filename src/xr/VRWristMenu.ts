@@ -6,6 +6,7 @@ export type WristMenuAction =
   | MiracleType
   | 'leash'
   | 'unleash'
+  | 'teleport'
   | 'jump_home'
   | 'jump_rival'
   | 'jump_creature'
@@ -15,7 +16,7 @@ export interface WristButtonDef {
   id: WristMenuAction;
   title: string;
   subtitle: string;
-  symbol: 'circle' | 'triangle' | 'wave' | 'spiral' | 'zigzag' | 'leash' | 'unleash' | 'home' | 'rival' | 'creature' | 'nav';
+  symbol: 'circle' | 'triangle' | 'wave' | 'spiral' | 'zigzag' | 'leash' | 'unleash' | 'teleport' | 'home' | 'rival' | 'creature' | 'nav';
   accentColor: string;
   row: 0 | 1;
   col: number;
@@ -28,6 +29,7 @@ const BUTTON_DEFS: WristButtonDef[] = [
   { id: 'rain', title: 'Rain', subtitle: 'Draw ~ · 15', symbol: 'wave', accentColor: '#66d4ff', row: 0, col: 2 },
   { id: 'fireball', title: 'Fireball', subtitle: 'Draw @ · 18', symbol: 'spiral', accentColor: '#ff6633', row: 0, col: 3 },
   { id: 'lightning', title: 'Lightning', subtitle: 'Draw Z · 24', symbol: 'zigzag', accentColor: '#a6e3ff', row: 0, col: 4 },
+  { id: 'teleport', title: 'Swoop Go', subtitle: 'Aim & Pinch', symbol: 'teleport', accentColor: '#7aff9e', row: 0, col: 5 },
   // Row 1: Creature Leash & VR Navigation shortcuts
   { id: 'leash', title: 'Leash', subtitle: 'Aim & Pinch', symbol: 'leash', accentColor: '#66f0ff', row: 1, col: 0 },
   { id: 'unleash', title: 'Unleash', subtitle: 'Free Roam', symbol: 'unleash', accentColor: '#99c4d6', row: 1, col: 1 },
@@ -116,6 +118,16 @@ function drawSymbol(ctx: CanvasRenderingContext2D, symbol: WristButtonDef['symbo
     ctx.moveTo(cx + 18, cy - 16);
     ctx.lineTo(cx - 18, cy + 16);
     ctx.stroke();
+  } else if (symbol === 'teleport') {
+    ctx.arc(cx, cy + 10, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 10);
+    ctx.lineTo(cx, cy - 22);
+    ctx.moveTo(cx - 10, cy - 12);
+    ctx.lineTo(cx, cy - 22);
+    ctx.lineTo(cx + 10, cy - 12);
+    ctx.stroke();
   } else if (symbol === 'home') {
     ctx.moveTo(cx - 20, cy + 2);
     ctx.lineTo(cx, cy - 20);
@@ -194,7 +206,7 @@ export class VRWristMenu {
   public readonly group = new THREE.Group();
   public isOpen = false;
   public pinned = false;
-  public armedAction: MiracleType | 'leash' | null = null;
+  public armedAction: MiracleType | 'leash' | 'teleport' | null = null;
 
   private readonly buttons: MenuButtonInstance[] = [];
   private openAmount = 0;
@@ -230,7 +242,7 @@ export class VRWristMenu {
       });
       const mesh = new THREE.Mesh(cardGeom, mat);
 
-      const colsInRow = def.row === 0 ? 5 : 6;
+      const colsInRow = 6;
       const xSpacing = 0.076;
       const x = (def.col - (colsInRow - 1) * 0.5) * xSpacing;
       const y = def.row === 0 ? 0.044 : -0.042;
@@ -329,7 +341,8 @@ export class VRWristMenu {
             action === 'rain' ||
             action === 'fireball' ||
             action === 'lightning' ||
-            action === 'leash'
+            action === 'leash' ||
+            action === 'teleport'
           ) {
             this.armedAction = this.armedAction === action ? null : action;
           } else if (action === 'unleash') {

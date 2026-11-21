@@ -60,6 +60,10 @@ export class DesktopSimulator {
     return this.throwVelocity;
   }
 
+  getFocusPos(): THREE.Vector3 {
+    return this.focus;
+  }
+
   constructor(
     private readonly domElement: HTMLElement,
     private readonly camera: THREE.PerspectiveCamera,
@@ -79,9 +83,14 @@ export class DesktopSimulator {
     this.domElement.addEventListener('pointerdown', (e) => {
       this.updatePointer(e);
       this.lastMouse.set(e.clientX, e.clientY);
+      try {
+        this.domElement.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore synthetic events without active pointerId
+      }
 
-      // Right-click, Middle-click, or Shift+Left-click (great for laptop trackpads!) orbits camera
-      if (e.button === 2 || e.button === 1 || (e.button === 0 && e.shiftKey)) {
+      // Right-click, Middle-click, or Shift/Alt+Left-click (great for laptop trackpads!) orbits camera
+      if (e.button === 2 || e.button === 1 || (e.button === 0 && (e.shiftKey || e.altKey))) {
         this.orbiting = true;
         return;
       }
@@ -95,8 +104,8 @@ export class DesktopSimulator {
         return;
       }
 
-      // Check if clicking near a grabbable physics prop
-      const nearest = this.physics.findNearestGrabbable(hit, 2.8);
+      // Tighter pick radius (1.9m) so dragging empty ground never accidentally uproots nearby trees
+      const nearest = this.physics.findNearestGrabbable(hit, 1.9);
       if (nearest) {
         this.grabbedProp = nearest;
         const justUprooted = this.physics.grabProp(nearest, 'desktop');
@@ -180,10 +189,20 @@ export class DesktopSimulator {
       'wheel',
       (e) => {
         e.preventDefault();
-        // Smooth exponential zoom on vertical wheel / trackpad scroll
-        const clampedDelta = THREE.MathUtils.clamp(e.deltaY, -120, 120);
-        const factor = Math.exp(clampedDelta * 0.0016);
-        this.targetDistance = THREE.MathUtils.clamp(this.targetDistance * factor, 8, 160);
+        // Laptop trackpad 2-finger horizontal/diagonal scroll => smooth panning!
+        if (!e.ctrlKey && Math.abs(e.deltaX) > 2) {
+          const panScale = this.distance * 0.0028;
+          const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+          const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+          this.targetFocus.addScaledVector(right, e.deltaX * panScale);
+          this.targetFocus.addScaledVector(forward, -e.deltaY * panScale);
+          this.clampFocus();
+          return;
+        }
+        // Mouse wheel or trackpad pinch-zoom => smooth exponential zoom!
+        const clampedDelta = THREE.MathUtils.clamp(e.deltaY, -140, 140);
+        const factor = Math.exp(clampedDelta * (e.ctrlKey ? 0.0065 : 0.0022));
+        this.targetDistance = THREE.MathUtils.clamp(this.targetDistance * factor, 8, 180);
       },
       { passive: false }
     );
@@ -240,10 +259,10 @@ export class DesktopSimulator {
   }
 
   private clampFocus(): void {
-    this.targetFocus.x = THREE.MathUtils.clamp(this.targetFocus.x, -145, 145);
-    this.targetFocus.z = THREE.MathUtils.clamp(this.targetFocus.z, -145, 145);
-    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -145, 145);
-    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -145, 145);
+    this.targetFocus.x = THREE.MathUtils.clamp(this.targetFocus.x, -180, 180);
+    this.targetFocus.z = THREE.MathUtils.clamp(this.targetFocus.z, -180, 180);
+    this.focus.x = THREE.MathUtils.clamp(this.focus.x, -180, 180);
+    this.focus.z = THREE.MathUtils.clamp(this.focus.z, -180, 180);
   }
 
   update(dt: number, inVR: boolean): void {

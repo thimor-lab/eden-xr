@@ -5,11 +5,14 @@ import { HandState } from './HandTracker';
 export type VRNavMode = 'world-pull' | 'point-glide';
 
 /**
- * VR-native God Locomotion designed for bare-hand Android XR:
- * - World-Pull mode: 1-hand grab air to pull & flick-glide (with smooth inertia),
- *   2-hand grab to scale (zoom) AND twist-rotate the island like a living diorama!
- * - Point-Glide mode: Open-palm/pinch aim glides smoothly toward where you point.
- * - Smooth Swoop-To-Target: Instant comfortable jumps to Home, Rival Village, or Creature!
+ * Reworked VR-native Diorama God Locomotion:
+ * - Triggered ONLY by deliberate FIST (`isGripFist`) so navigation NEVER fights Pinch object grabbing!
+ * - 1-Hand Fist + Pull: Pure horizontal XZ world-pull with gentle flick-glide inertia (zero vertical sky-launch!).
+ * - 2-Hand Fist + Spread/Squeeze: Scales smoothly PIVOTED AROUND THE MIDPOINT between both hands
+ *   so the village/island you are looking at stays locked right in front of you!
+ * - 2-Hand Fist + Twist: Rotates the island like a turntable around that same midpoint (zero swing nausea!).
+ * - 2-Hand Fist + Raise/Lower both hands together: Deliberate smooth altitude adjustment.
+ * - Point-Glide mode + Swoop-To-Target (Teleport / Quick Jumps).
  */
 export class WorldLocomotion {
   public navMode: VRNavMode = 'world-pull';
@@ -17,13 +20,13 @@ export class WorldLocomotion {
   public hasZoomedByTwoHand = false;
 
   private pullingHand: 'left' | 'right' | null = null;
-  private lastPullPos = new THREE.Vector3();
-  private glideVelocity = new THREE.Vector3();
+  private lastPullLocal = new THREE.Vector3();
+  private glideVelocityXZ = new THREE.Vector3();
 
   private twoHandActive = false;
-  private initialTwoHandDist = 1;
-  private initialRigScale = 8.5;
+  private lastTwoHandDist = 1;
   private lastTwoHandAngle = 0;
+  private lastTwoHandMidY = 0;
 
   private swoopTargetPos: THREE.Vector3 | null = null;
   private swoopTargetScale: number | null = null;
@@ -36,14 +39,14 @@ export class WorldLocomotion {
     private readonly terrain: IslandTerrain
   ) {
     this.grabAnchorMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.025, 10, 8),
-      new THREE.MeshBasicMaterial({ color: 0x66f0ff, transparent: true, opacity: 0.75 })
+      new THREE.SphereGeometry(0.028, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0x66f0ff, transparent: true, opacity: 0.8 })
     );
     this.grabAnchorMesh.visible = false;
 
     this.twoHandLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-      new THREE.LineBasicMaterial({ color: 0xffe488, transparent: true, opacity: 0.85 })
+      new THREE.LineBasicMaterial({ color: 0xffe488, transparent: true, opacity: 0.9 })
     );
     this.twoHandLine.frustumCulled = false;
     this.twoHandLine.visible = false;
@@ -55,35 +58,50 @@ export class WorldLocomotion {
   resetView(): void {
     this.swoopTargetPos = null;
     this.swoopTargetScale = null;
-    this.glideVelocity.set(0, 0, 0);
-    this.godRig.position.set(PLAYER_VILLAGE_POS.x - 4, 16, PLAYER_VILLAGE_POS.z + 24);
+    this.glideVelocityXZ.set(0, 0, 0);
+    this.pullingHand = null;
+    this.twoHandActive = false;
+    this.godRig.position.set(PLAYER_VILLAGE_POS.x - 4, 14, PLAYER_VILLAGE_POS.z + 22);
     this.godRig.rotation.set(0, 0, 0);
-    this.godRig.scale.setScalar(8.5);
+    this.godRig.scale.setScalar(8.0);
+    this.godRig.updateMatrixWorld(true);
   }
 
   toggleNavMode(): VRNavMode {
     this.navMode = this.navMode === 'world-pull' ? 'point-glide' : 'world-pull';
-    this.glideVelocity.set(0, 0, 0);
+    this.glideVelocityXZ.set(0, 0, 0);
     this.pullingHand = null;
     return this.navMode;
   }
 
-  /** Smoothly swoops the player over a target world coordinate (e.g. Home, Rival, Creature) */
-  swoopTo(worldTarget: THREE.Vector3, targetScale = 7.5): void {
-    const y = Math.max(12, this.terrain.getHeightAt(worldTarget.x, worldTarget.z) + targetScale * 1.45);
-    this.swoopTargetPos = new THREE.Vector3(worldTarget.x, y, worldTarget.z + targetScale * 2.0);
-    this.swoopTargetScale = THREE.MathUtils.clamp(targetScale, 2.5, 20);
-    this.glideVelocity.set(0, 0, 0);
+  /** Smoothly swoops the player over any world coordinate (used by Teleport & Quick Jumps) */
+  swoopTo(worldTarget: THREE.Vector3, targetScale?: number): void {
+    const scale = THREE.MathUtils.clamp(targetScale ?? this.godRig.scale.x, 2.5, 20);
+    const groundY = Math.max(0, this.terrain.getHeightAt(worldTarget.x, worldTarget.z));
+    // Place rig slightly back along current facing direction so target sits right in front of the player
+    const backOffset = new THREE.Vector3(0, 0, scale * 1.8).applyAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      this.godRig.rotation.y
+    );
+    this.swoopTargetPos = new THREE.Vector3(
+      worldTarget.x + backOffset.x,
+      Math.max(6, groundY + scale * 0.9),
+      worldTarget.z + backOffset.z
+    );
+    this.swoopTargetScale = scale;
+    this.glideVelocityXZ.set(0, 0, 0);
     this.pullingHand = null;
+    this.twoHandActive = false;
   }
 
   update(left: HandState, right: HandState, leftBusy: boolean, rightBusy: boolean, dt = 1 / 72): void {
-    // 1. Handle smooth swoop jump if active
+    // 1. Handle smooth swoop jump / teleport if active
     if (this.swoopTargetPos && this.swoopTargetScale !== null) {
-      const alpha = 1 - Math.exp(-5.5 * dt);
+      const alpha = 1 - Math.exp(-5.8 * dt);
       this.godRig.position.lerp(this.swoopTargetPos, alpha);
       const nextScale = THREE.MathUtils.lerp(this.godRig.scale.x, this.swoopTargetScale, alpha);
       this.godRig.scale.setScalar(nextScale);
+      this.godRig.updateMatrixWorld(true);
       if (this.godRig.position.distanceTo(this.swoopTargetPos) < 0.35) {
         this.swoopTargetPos = null;
         this.swoopTargetScale = null;
@@ -91,16 +109,19 @@ export class WorldLocomotion {
       return;
     }
 
-    const leftFreeGrab = left.tracked && (left.isGrabbing || left.isPinching) && !leftBusy;
-    const rightFreeGrab = right.tracked && (right.isGrabbing || right.isPinching) && !rightBusy;
+    // Navigation uses deliberate FIST (`isGripFist`) — completely separate from Pinch!
+    const leftFist = left.tracked && left.isGripFist && !leftBusy;
+    const rightFist = right.tracked && right.isGripFist && !rightBusy;
 
-    // 2. Two-hand diorama scale (zoom) + twist rotation!
-    if (leftFreeGrab && rightFreeGrab) {
+    // 2. Two-hand midpoint-pivoted Zoom + Turntable Yaw Rotate + Deliberate Vertical Lift!
+    if (leftFist && rightFist) {
       this.pullingHand = null;
       this.grabAnchorMesh.visible = false;
-      this.glideVelocity.set(0, 0, 0);
+      this.glideVelocityXZ.set(0, 0, 0);
+
       const lLocal = left.palmLocalPos;
       const rLocal = right.palmLocalPos;
+      const midLocal = lLocal.clone().lerp(rLocal, 0.5);
       const dist = Math.max(0.08, lLocal.distanceTo(rLocal));
       const angle = Math.atan2(rLocal.z - lLocal.z, rLocal.x - lLocal.x);
 
@@ -110,59 +131,86 @@ export class WorldLocomotion {
 
       if (!this.twoHandActive) {
         this.twoHandActive = true;
-        this.initialTwoHandDist = dist;
-        this.initialRigScale = this.godRig.scale.x;
+        this.lastTwoHandDist = dist;
         this.lastTwoHandAngle = angle;
-      } else {
-        const ratio = this.initialTwoHandDist / dist;
-        const nextScale = THREE.MathUtils.clamp(this.initialRigScale * ratio, 2.0, 24.0);
-        if (Math.abs(nextScale - this.initialRigScale) > 0.6) {
-          this.hasZoomedByTwoHand = true;
-        }
-        this.godRig.scale.setScalar(nextScale);
-
-        // Smooth yaw twist rotation
-        let dAngle = angle - this.lastTwoHandAngle;
-        if (dAngle > Math.PI) dAngle -= Math.PI * 2;
-        if (dAngle < -Math.PI) dAngle += Math.PI * 2;
-        this.godRig.rotation.y += dAngle * 0.85;
-        this.lastTwoHandAngle = angle;
+        this.lastTwoHandMidY = midLocal.y;
+        return;
       }
+
+      // Compute world position of midpoint BEFORE transform so we can keep it pinned in world space!
+      this.godRig.updateMatrixWorld(true);
+      const pivotWorldBefore = midLocal.clone().applyMatrix4(this.godRig.matrixWorld);
+
+      // a) Incremental scale (spread hands = zoom IN / shrink rig scale; squeeze = zoom OUT)
+      const scaleRatio = this.lastTwoHandDist / dist;
+      const clampedRatio = THREE.MathUtils.clamp(scaleRatio, 0.85, 1.18);
+      const nextScale = THREE.MathUtils.clamp(this.godRig.scale.x * clampedRatio, 2.0, 22.0);
+      if (Math.abs(nextScale - this.godRig.scale.x) > 0.04) {
+        this.hasZoomedByTwoHand = true;
+      }
+      this.godRig.scale.setScalar(nextScale);
+
+      // b) Incremental turntable yaw rotation around midpoint
+      let dAngle = angle - this.lastTwoHandAngle;
+      if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+      if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+      this.godRig.rotation.y += THREE.MathUtils.clamp(dAngle, -0.15, 0.15);
+
+      // Recompute midpoint in world space AFTER scale+rotation and compensate position so pivot stays FIXED!
+      this.godRig.updateMatrixWorld(true);
+      const pivotWorldAfter = midLocal.clone().applyMatrix4(this.godRig.matrixWorld);
+      this.godRig.position.add(pivotWorldBefore.sub(pivotWorldAfter));
+
+      // c) Deliberate altitude change when raising/lowering BOTH fists together
+      const dMidY = midLocal.y - this.lastTwoHandMidY;
+      this.godRig.position.y -= dMidY * this.godRig.scale.x * 0.9;
+
+      this.clampRigPosition();
+      this.godRig.updateMatrixWorld(true);
+
+      this.lastTwoHandDist = dist;
+      this.lastTwoHandAngle = angle;
+      this.lastTwoHandMidY = midLocal.y;
       return;
     }
 
     this.twoHandActive = false;
     this.twoHandLine.visible = false;
 
-    // 3. Point-Glide navigation mode (fly smoothly in the direction your free hand points)
+    // 3. Point-Glide navigation mode (horizontal flight in pointing direction)
     if (this.navMode === 'point-glide') {
-      const activeHand = leftFreeGrab ? left : rightFreeGrab ? right : null;
+      const activeHand = leftFist ? left : rightFist ? right : null;
       if (activeHand) {
         this.grabAnchorMesh.position.copy(activeHand.palmLocalPos);
         this.grabAnchorMesh.visible = true;
         this.hasMovedByNav = true;
-        const flySpeed = Math.max(12, this.godRig.scale.x * 2.4);
+        const flySpeed = Math.max(14, this.godRig.scale.x * 2.5);
         const dir = activeHand.aimDirectionWorld.clone();
-        dir.y *= 0.45; // Gentle vertical glide
-        this.glideVelocity.lerp(dir.multiplyScalar(flySpeed), Math.min(1, dt * 6));
+        dir.y = 0; // Keep flight level and comfortable!
+        if (dir.lengthSq() > 1e-4) dir.normalize();
+        this.glideVelocityXZ.lerp(dir.multiplyScalar(flySpeed), Math.min(1, dt * 6));
       } else {
         this.grabAnchorMesh.visible = false;
-        this.glideVelocity.multiplyScalar(Math.exp(-4.5 * dt));
+        this.glideVelocityXZ.multiplyScalar(Math.exp(-5.0 * dt));
       }
-      this.godRig.position.addScaledVector(this.glideVelocity, dt);
+      this.godRig.position.x += this.glideVelocityXZ.x * dt;
+      this.godRig.position.z += this.glideVelocityXZ.z * dt;
       this.clampRigPosition();
+      this.godRig.updateMatrixWorld(true);
       return;
     }
 
-    // 4. World-Pull mode with inertial flick-glide!
-    const activeHand = leftFreeGrab ? left : rightFreeGrab ? right : null;
+    // 4. World-Pull mode: pure horizontal XZ diorama pull with gentle flick-glide inertia!
+    const activeHand = leftFist ? left : rightFist ? right : null;
     if (!activeHand) {
       this.pullingHand = null;
       this.grabAnchorMesh.visible = false;
-      if (this.glideVelocity.lengthSq() > 0.02) {
-        this.godRig.position.addScaledVector(this.glideVelocity, dt);
-        this.glideVelocity.multiplyScalar(Math.exp(-3.8 * dt));
+      if (this.glideVelocityXZ.lengthSq() > 0.04) {
+        this.godRig.position.x += this.glideVelocityXZ.x * dt;
+        this.godRig.position.z += this.glideVelocityXZ.z * dt;
+        this.glideVelocityXZ.multiplyScalar(Math.exp(-4.5 * dt));
         this.clampRigPosition();
+        this.godRig.updateMatrixWorld(true);
       }
       return;
     }
@@ -173,34 +221,41 @@ export class WorldLocomotion {
 
     if (this.pullingHand !== activeHand.handedness) {
       this.pullingHand = activeHand.handedness;
-      this.lastPullPos.copy(localPos);
-      this.glideVelocity.set(0, 0, 0);
+      this.lastPullLocal.copy(localPos);
+      this.glideVelocityXZ.set(0, 0, 0);
       return;
     }
 
-    const deltaLocal = localPos.clone().sub(this.lastPullPos);
-    if (deltaLocal.length() > 0.008) {
+    // Horizontal-only delta (y = 0) so pulling never accidentally launches you into the sky or ground!
+    const deltaLocal = new THREE.Vector3(localPos.x - this.lastPullLocal.x, 0, localPos.z - this.lastPullLocal.z);
+    if (deltaLocal.length() > 0.005) {
       this.hasMovedByNav = true;
     }
-    // Rotate local delta by rig yaw so pulling always matches your facing direction
+
+    // Rotate local delta by rig yaw so pulling always moves the world in exact lockstep with your hand!
     deltaLocal.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.godRig.rotation.y);
-    const deltaWorld = deltaLocal.multiplyScalar(this.godRig.scale.x * 1.25);
-    this.godRig.position.sub(deltaWorld);
+    const deltaWorldXZ = deltaLocal.multiplyScalar(this.godRig.scale.x * 1.35);
+
+    this.godRig.position.x -= deltaWorldXZ.x;
+    this.godRig.position.z -= deltaWorldXZ.z;
 
     if (dt > 1e-4) {
-      const instantVel = deltaWorld.clone().divideScalar(-dt);
-      this.glideVelocity.lerp(instantVel, 0.35);
-      if (this.glideVelocity.length() > 45) this.glideVelocity.setLength(45);
+      const instantVel = new THREE.Vector3(-deltaWorldXZ.x / dt, 0, -deltaWorldXZ.z / dt);
+      this.glideVelocityXZ.lerp(instantVel, 0.35);
+      if (this.glideVelocityXZ.length() > 38) this.glideVelocityXZ.setLength(38);
     }
 
     this.clampRigPosition();
-    this.lastPullPos.copy(localPos);
+    this.godRig.updateMatrixWorld(true);
+    this.lastPullLocal.copy(localPos);
   }
 
   private clampRigPosition(): void {
-    this.godRig.position.x = THREE.MathUtils.clamp(this.godRig.position.x, -110, 110);
-    this.godRig.position.z = THREE.MathUtils.clamp(this.godRig.position.z, -110, 110);
-    const groundY = this.terrain.getHeightAt(this.godRig.position.x, this.godRig.position.z);
-    this.godRig.position.y = THREE.MathUtils.clamp(this.godRig.position.y, Math.max(3.0, groundY + 2.2), 75);
+    this.godRig.position.x = THREE.MathUtils.clamp(this.godRig.position.x, -125, 125);
+    this.godRig.position.z = THREE.MathUtils.clamp(this.godRig.position.z, -125, 125);
+    const groundY = Math.max(0, this.terrain.getHeightAt(this.godRig.position.x, this.godRig.position.z));
+    // Keep camera comfortably above terrain (head sits at rig.y + ~1.5 * rig.scale)
+    const minRigY = Math.max(1.5, groundY - this.godRig.scale.x * 0.5);
+    this.godRig.position.y = THREE.MathUtils.clamp(this.godRig.position.y, minRigY, 60);
   }
 }

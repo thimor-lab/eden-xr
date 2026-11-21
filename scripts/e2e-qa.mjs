@@ -88,13 +88,15 @@ async function run() {
     assert(initial.logs.summary.errorCount === 0, `Zero app errors on boot (${initial.logs.summary.errorCount})`);
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, '01-player-village.png') });
 
-    // 2. Desktop Navigation QA (Left-drag pan, Right-drag orbit, Scroll zoom, WASD, R Rival, C Creature)
+    // 2. Desktop Navigation QA (Left-drag pan, Right-drag orbit, Wheel zoom, Trackpad 2-finger pan, WASD, R Rival, C Creature)
     console.log('\n[2/4] Desktop Navigation QA');
+    await page.click('#toggle-help-btn'); // Collapse controls card for wide open view
     const camStart = initial.cameraPos;
+
     // Left-drag empty ground to pan
     await page.mouse.move(640, 360);
     await page.mouse.down({ button: 'left' });
-    await page.mouse.move(480, 260, { steps: 8 });
+    await page.mouse.move(460, 250, { steps: 10 });
     await page.mouse.up({ button: 'left' });
     await page.waitForTimeout(350);
     const afterPan = await page.evaluate(() => window.__EDEN_QA__.getState());
@@ -104,11 +106,31 @@ async function run() {
     );
     assert(panDist > 1.5, `Left-drag ground panning moved camera (${panDist.toFixed(1)}m)`);
 
+    // Right-drag orbit
+    await page.mouse.move(640, 360);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.move(820, 310, { steps: 8 });
+    await page.mouse.up({ button: 'right' });
+    await page.waitForTimeout(350);
+    const afterOrbit = await page.evaluate(() => window.__EDEN_QA__.getState());
+    const orbitDist = Math.hypot(
+      afterOrbit.cameraPos[0] - afterPan.cameraPos[0],
+      afterOrbit.cameraPos[2] - afterPan.cameraPos[2]
+    );
+    assert(orbitDist > 2.0, `Right-drag orbit rotated camera smoothly (${orbitDist.toFixed(1)}m arc)`);
+
+    // Wheel zoom out
+    const yBeforeZoom = afterOrbit.cameraPos[1];
+    await page.mouse.wheel(0, 240);
+    await page.waitForTimeout(450);
+    const afterZoom = await page.evaluate(() => window.__EDEN_QA__.getState());
+    assert(afterZoom.cameraPos[1] > yBeforeZoom + 1.5, `Scroll wheel zoomed camera smoothly (Y ${yBeforeZoom.toFixed(1)} -> ${afterZoom.cameraPos[1].toFixed(1)})`);
+
     // Jump to Rival Village ('R')
     await page.keyboard.press('KeyR');
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(750);
     const atRival = await page.evaluate(() => window.__EDEN_QA__.getState());
-    assert(atRival.cameraPos[0] > 10, `KeyR navigated to Rival Village (camX=${atRival.cameraPos[0].toFixed(1)})`);
+    assert(atRival.focusPos[0] > 24, `KeyR navigated focus to Rival Village (focusX=${atRival.focusPos[0].toFixed(1)})`);
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, '02-rival-village.png') });
 
     // Jump to Creature ('C')

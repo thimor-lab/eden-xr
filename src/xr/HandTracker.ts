@@ -19,6 +19,9 @@ export interface HandState {
   peakVelocityWorld: THREE.Vector3;
   isPinching: boolean;
   wasPinching: boolean;
+  /** True when middle/ring/pinky fingers are curled into a deliberate navigation fist */
+  isGripFist: boolean;
+  wasGripFist: boolean;
   isGrabbing: boolean;
   wasGrabbing: boolean;
   isPointing: boolean;
@@ -90,6 +93,8 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
     peakVelocityWorld: new THREE.Vector3(),
     isPinching: false,
     wasPinching: false,
+    isGripFist: false,
+    wasGripFist: false,
     isGrabbing: false,
     wasGrabbing: false,
     isPointing: false,
@@ -160,7 +165,8 @@ export class HandTracker {
           const gp = source.gamepad;
           if (gp) {
             state.isPinching = gp.buttons[0]?.pressed ?? false;
-            state.isGrabbing = gp.buttons[1]?.pressed ?? false;
+            state.isGripFist = gp.buttons[1]?.pressed ?? false;
+            state.isGrabbing = state.isGripFist;
             state.isPointing = gp.buttons[4]?.pressed ?? false;
           }
           visual.updateJoints([], localPos, palette);
@@ -174,12 +180,14 @@ export class HandTracker {
 
   private prepareFrame(state: HandState): void {
     state.wasPinching = state.isPinching;
+    state.wasGripFist = state.isGripFist;
     state.wasGrabbing = state.isGrabbing;
     state.wasPointing = state.isPointing;
     state.tracked = false;
     state.jointCount = 0;
     state.palmDotHead = 0;
     state.isPinching = false;
+    state.isGripFist = false;
     state.isGrabbing = false;
     state.isPointing = false;
     state.isOpenPalm = false;
@@ -262,18 +270,24 @@ export class HandTracker {
     this.updateVelocity(state, state.palmWorldPos, dt);
 
     // Pose classification in physical meter space (independent of godRig.scale!)
-    const pinchDist = thumbTip.distanceTo(indexTip);
-    state.isPinching = pinchDist < 0.032;
-
     const indexDist = indexTip.distanceTo(palmLocal);
     const midDist = middleTip ? middleTip.distanceTo(palmLocal) : 0.08;
     const ringDist = ringTip ? ringTip.distanceTo(palmLocal) : 0.08;
     const pinkyDist = pinkyTip ? pinkyTip.distanceTo(palmLocal) : 0.08;
     const avgCurl = (indexDist + midDist + ringDist + pinkyDist) * 0.25;
+    const gripCurl = (midDist + ringDist + pinkyDist) / 3;
 
-    state.isGrabbing = avgCurl < 0.072;
-    state.isPointing = indexDist > 0.088 && midDist < 0.068 && ringDist < 0.068 && !state.isPinching;
-    state.isOpenPalm = avgCurl > 0.095 && !state.isPinching;
+    // Strict separation:
+    // - Grip Fist (middle+ring+pinky closed tight + index curled) => World Navigation
+    // - Pinch (thumb+index tips touching while not making a full fist) => Object Interaction
+    state.isGripFist = gripCurl < 0.068 && indexDist < 0.082;
+    state.isGrabbing = state.isGripFist;
+
+    const pinchDist = thumbTip.distanceTo(indexTip);
+    state.isPinching = pinchDist < 0.034 && !state.isGripFist;
+
+    state.isPointing = indexDist > 0.088 && midDist < 0.07 && ringDist < 0.07 && !state.isPinching && !state.isGripFist;
+    state.isOpenPalm = avgCurl > 0.092 && !state.isPinching && !state.isGripFist;
 
     visual.updateJoints(localJoints, palmLocal, palette);
   }

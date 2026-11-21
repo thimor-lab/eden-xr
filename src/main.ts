@@ -38,6 +38,15 @@ async function bootstrap(): Promise<void> {
   const githubIssueBtn = document.getElementById('github-issue-btn') as HTMLButtonElement;
   const clearLogsBtn = document.getElementById('clear-logs-btn') as HTMLButtonElement;
   const closeLogsBtn = document.getElementById('close-logs-btn') as HTMLButtonElement;
+  const toggleHelpBtn = document.getElementById('toggle-help-btn') as HTMLButtonElement | null;
+  const helpBodyEl = document.getElementById('help-body');
+  if (toggleHelpBtn && helpBodyEl) {
+    toggleHelpBtn.addEventListener('click', () => {
+      const hidden = helpBodyEl.style.display === 'none';
+      helpBodyEl.style.display = hidden ? 'block' : 'none';
+      toggleHelpBtn.textContent = hidden ? 'Hide' : 'Show';
+    });
+  }
   const overlayEl = document.getElementById('overlay')!;
   const toastEl = document.getElementById('toast')!;
 
@@ -400,6 +409,7 @@ async function bootstrap(): Promise<void> {
       return {
         inVR: xrManager.inVR,
         cameraPos: camera.position.toArray(),
+        focusPos: desktopSim.getFocusPos().toArray(),
         godRigPos: godRig.position.toArray(),
         godRigScale: godRig.scale.x,
         creaturePos: creature.position.toArray(),
@@ -455,30 +465,39 @@ async function bootstrap(): Promise<void> {
       return false;
     }
 
-    const isGrasping = hand.isPinching || hand.isGrabbing;
-    const wasGrasping = hand.wasPinching || hand.wasGrabbing;
-    const grabRadius = Math.max(2.4, godRig.scale.x * 0.38);
-    const rayMaxDist = Math.max(22, godRig.scale.x * 4.5);
+    // Strict gesture separation: PINCH = object interaction, FIST = world navigation!
+    const isPinchInteract = hand.isPinching;
+    const wasPinchInteract = hand.wasPinching;
+    const grabRadius = Math.max(2.2, godRig.scale.x * 0.34);
+    const rayMaxDist = Math.max(18, godRig.scale.x * 3.6);
 
-    // 0. If a Miracle or Leash is armed from the Left-Palm Wrist Menu, project ground reticle on right hand!
+    // 0. If a Miracle, Leash, or Teleport/Swoop is armed from the Wrist Menu, project ground reticle on right hand!
     if (side === 'right' && wristMenu.armedAction && !wristMenu.isOpen) {
       const aimHit = raycastTerrainWorld(hand.pinchWorldPos, hand.aimDirectionWorld);
       if (aimHit) {
-        const isLeash = wristMenu.armedAction === 'leash';
-        const allowed = isLeash || wristMenu.armedAction === 'fireball' || influenceRing.isInside(aimHit);
-        feedback.setHover(side, aimHit, isLeash ? 2.4 : 2.0, allowed ? 'special' : 'blocked', elapsedSec);
+        const armed = wristMenu.armedAction;
+        const isLeash = armed === 'leash';
+        const isTeleport = armed === 'teleport';
+        const allowed = isLeash || isTeleport || armed === 'fireball' || influenceRing.isInside(aimHit);
+        feedback.setHover(side, aimHit, isTeleport ? 2.8 : isLeash ? 2.4 : 2.0, allowed ? 'special' : 'blocked', elapsedSec);
         feedback.setAimRay(
           side,
           hand.pinchWorldPos,
           aimHit,
-          new THREE.Color(isLeash ? 0x66f0ff : 0xffe488)
+          new THREE.Color(isTeleport ? 0x7aff9e : isLeash ? 0x66f0ff : 0xffe488)
         );
 
         if (hand.isPinching && !hand.wasPinching) {
-          const armed = wristMenu.armedAction;
-          if (armed === 'leash') {
+          if (armed === 'teleport') {
+            locomotion.swoopTo(aimHit);
+            tutorialProgress.moved = true;
+            logger.event('nav.swoop', 'Teleported to ground target', {
+              x: Number(aimHit.x.toFixed(1)),
+              z: Number(aimHit.z.toFixed(1)),
+            });
+          } else if (armed === 'leash') {
             creature.tieLeashTo(aimHit, playerVillage, rivalVillage);
-          } else if (armed) {
+          } else {
             const vel =
               armed === 'fireball'
                 ? aimHit.clone().sub(hand.pinchWorldPos).normalize().multiplyScalar(28)
@@ -491,12 +510,21 @@ async function bootstrap(): Promise<void> {
               rivalVillage
             );
           }
-          wristMenu.armedAction = null;
+          if (armed !== 'teleport') {
+            wristMenu.armedAction = null;
+          }
           feedback.setAimRay(side, null, null);
           return true;
         }
         return false;
       }
+    }
+
+    // If hand is making a navigation FIST while not holding a prop, yield immediately to WorldLocomotion!
+    if (hand.isGripFist && !heldProps[side] && !grabbingTotem[side] && creature.leashHeldByHand !== side) {
+      feedback.setHover(side, null, 1, 'none', elapsedSec);
+      feedback.setAimRay(side, null, null);
+      return false;
     }
 
     // 1. Direct Creature Petting / Slapping with open palm
@@ -529,7 +557,7 @@ async function bootstrap(): Promise<void> {
     if (creature.leashHeldByHand === side) {
       feedback.setHover(side, null, 1, 'none', elapsedSec);
       feedback.setAimRay(side, null, null);
-      if (isGrasping) {
+      if (isPinchInteract) {
         creature.updateHeldLeash(hand.pinchWorldPos);
         return true;
       } else {
@@ -546,7 +574,7 @@ async function bootstrap(): Promise<void> {
     if (grabbingTotem[side]) {
       feedback.setHover(side, playerVillage.totemPos, 2.2, 'special', elapsedSec);
       feedback.setAimRay(side, null, null);
-      if (isGrasping) {
+      if (isPinchInteract) {
         playerVillage.adjustTotemByWorldY(hand.pinchWorldPos.y);
         return true;
       } else {
@@ -559,7 +587,7 @@ async function bootstrap(): Promise<void> {
     if (held) {
       feedback.setHover(side, null, 1, 'none', elapsedSec);
       feedback.setAimRay(side, null, null);
-      if (isGrasping) {
+      if (isPinchInteract) {
         physics.moveGrabbedProp(held, hand.pinchWorldPos, 0.42);
         const previewVel = adjustReleaseVelocity(held, hand.peakVelocityWorld.clone().multiplyScalar(1.4));
         feedback.setThrowArc(held.mesh.position, previewVel);
@@ -573,17 +601,17 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    // 6. Hover detection (Direct proximity first, then Telekinetic Distant Ray-Grab!)
+    // 6. Hover detection (Direct proximity first, then tighter Telekinetic Ray-Grab!)
     const totemCenter = playerVillage.totemPos.clone().add(new THREE.Vector3(0, 2.5, 0));
-    const nearLeash = hand.pinchWorldPos.distanceTo(creature.collarWorldPos) < grabRadius + 2.8;
-    const nearTotem = hand.pinchWorldPos.distanceTo(totemCenter) < grabRadius + 1.5;
+    const nearLeash = hand.pinchWorldPos.distanceTo(creature.collarWorldPos) < grabRadius + 2.4;
+    const nearTotem = hand.pinchWorldPos.distanceTo(totemCenter) < grabRadius + 1.4;
 
     let hoverProp: PhysicsProp | null = null;
     let usedRay = false;
     if (!nearLeash && !nearTotem) {
       hoverProp = physics.findNearestGrabbable(hand.pinchWorldPos, grabRadius);
       if (!hoverProp) {
-        hoverProp = physics.findGrabbableAlongRay(hand.pinchWorldPos, hand.aimDirectionWorld, rayMaxDist, 2.2);
+        hoverProp = physics.findGrabbableAlongRay(hand.pinchWorldPos, hand.aimDirectionWorld, rayMaxDist, 0.9);
         usedRay = hoverProp !== null;
       }
     }
@@ -608,8 +636,8 @@ async function bootstrap(): Promise<void> {
       feedback.setAimRay(side, null, null);
     }
 
-    // 7. Starting a new grab (Creature Leash -> Totem -> Prop -> Villager)
-    if (isGrasping && !wasGrasping) {
+    // 7. Starting a new grab (PINCH only -> Creature Leash -> Totem -> Prop -> Villager)
+    if (isPinchInteract && !wasPinchInteract) {
       if (nearLeash) {
         creature.grabLeash(side, hand.pinchWorldPos);
         return true;
