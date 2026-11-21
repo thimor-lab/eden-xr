@@ -236,7 +236,7 @@ export class HandTracker {
 
     if (headLocalPos) {
       const toHead = headLocalPos.clone().sub(palmLocal).normalize();
-      state.isPalmFacingCamera = state.palmNormalLocal.dot(toHead) > 0.52;
+      state.isPalmFacingCamera = state.palmNormalLocal.dot(toHead) > 0.25;
     }
 
     // Transform from rig-local XR space into scaled world space

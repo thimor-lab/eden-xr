@@ -193,27 +193,30 @@ function createButtonTexture(def: WristButtonDef): THREE.CanvasTexture | null {
 export class VRWristMenu {
   public readonly group = new THREE.Group();
   public isOpen = false;
+  public pinned = false;
   public armedAction: MiracleType | 'leash' | null = null;
 
   private readonly buttons: MenuButtonInstance[] = [];
   private openAmount = 0;
   private pokeCooldown = 0;
+  private smoothedPos = new THREE.Vector3();
+  private hasSmoothedPos = false;
 
   constructor(parent: THREE.Object3D) {
     // Backplate panel
     const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.41, 0.16),
+      new THREE.PlaneGeometry(0.49, 0.2),
       new THREE.MeshBasicMaterial({
         color: 0x0a111c,
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.72,
         side: THREE.DoubleSide,
       })
     );
     plate.position.z = -0.004;
     this.group.add(plate);
 
-    const cardGeom = new THREE.PlaneGeometry(0.058, 0.058);
+    const cardGeom = new THREE.PlaneGeometry(0.07, 0.07);
 
     for (const def of BUTTON_DEFS) {
       const tex = createButtonTexture(def);
@@ -226,10 +229,10 @@ export class VRWristMenu {
       const mesh = new THREE.Mesh(cardGeom, mat);
 
       const colsInRow = def.row === 0 ? 5 : 6;
-      const xSpacing = 0.064;
+      const xSpacing = 0.076;
       const x = (def.col - (colsInRow - 1) * 0.5) * xSpacing;
-      const y = def.row === 0 ? 0.036 : -0.034;
-      const z = 0.004;
+      const y = def.row === 0 ? 0.044 : -0.042;
+      const z = 0.006;
 
       const localOffset = new THREE.Vector3(x, y, z);
       mesh.position.copy(localOffset);
@@ -241,6 +244,18 @@ export class VRWristMenu {
     parent.add(this.group);
   }
 
+  togglePinned(headLocalPos: THREE.Vector3, headForwardLocal: THREE.Vector3): boolean {
+    this.pinned = !this.pinned;
+    if (this.pinned) {
+      const fwd = headForwardLocal.clone().setY(0);
+      if (fwd.lengthSq() < 0.01) fwd.set(0, 0, -1);
+      fwd.normalize();
+      this.smoothedPos.copy(headLocalPos).addScaledVector(fwd, 0.62).add(new THREE.Vector3(0, -0.14, 0));
+      this.hasSmoothedPos = true;
+    }
+    return this.pinned;
+  }
+
   update(
     left: HandState,
     right: HandState,
@@ -250,32 +265,44 @@ export class VRWristMenu {
   ): boolean {
     if (this.pokeCooldown > 0) this.pokeCooldown -= dt;
 
-    // Reveal menu when left palm is open and turned toward the user's face
-    const shouldOpen = left.tracked && left.isOpenPalm && left.isPalmFacingCamera;
+    // Reveal menu when pinned OR when left palm is turned upward/toward face (forgiving threshold!)
+    const palmTriggered = left.tracked && left.isPalmFacingCamera && !left.isPinching && !left.isGrabbing;
+    const shouldOpen = this.pinned || palmTriggered;
     this.isOpen = shouldOpen;
-    this.openAmount = THREE.MathUtils.lerp(this.openAmount, shouldOpen ? 1 : 0, Math.min(1, dt * 12));
+    this.openAmount = THREE.MathUtils.lerp(this.openAmount, shouldOpen ? 1 : 0, Math.min(1, dt * 11));
 
     if (this.openAmount < 0.04) {
       this.group.visible = false;
+      this.hasSmoothedPos = false;
       return false;
     }
 
     this.group.visible = true;
-    // Float cleanly 11cm above left palm, facing the headset camera
-    this.group.position.copy(left.palmLocalPos).add(new THREE.Vector3(0, 0.11, 0));
+    if (!this.pinned && left.tracked) {
+      // Float 13cm above left palm with gentle smoothing so buttons stay steady while poking
+      const targetPos = left.palmLocalPos.clone().add(new THREE.Vector3(0, 0.13, 0));
+      if (!this.hasSmoothedPos) {
+        this.smoothedPos.copy(targetPos);
+        this.hasSmoothedPos = true;
+      } else {
+        this.smoothedPos.lerp(targetPos, Math.min(1, dt * 9));
+      }
+    }
+    this.group.position.copy(this.smoothedPos);
     this.group.lookAt(headLocalPos);
     this.group.scale.setScalar(this.openAmount);
 
-    // Check right index fingertip poking any 3D button
+    // Check right index fingertip (or left if pinned) poking any 3D button
     let interacting = false;
-    if (right.tracked && this.openAmount > 0.7) {
+    if (right.tracked && this.openAmount > 0.65) {
+      this.group.updateMatrix();
       const buttonRigPositions = this.buttons.map((b) => {
         const p = b.localOffset.clone();
         p.applyMatrix4(this.group.matrix);
         return p;
       });
 
-      const pokedIdx = findPokedButtonIndex(right.indexTipLocalPos, buttonRigPositions, 0.038);
+      const pokedIdx = findPokedButtonIndex(right.indexTipLocalPos, buttonRigPositions, 0.048);
 
       for (let i = 0; i < this.buttons.length; i++) {
         const btn = this.buttons[i];

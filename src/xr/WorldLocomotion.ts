@@ -13,6 +13,8 @@ export type VRNavMode = 'world-pull' | 'point-glide';
  */
 export class WorldLocomotion {
   public navMode: VRNavMode = 'world-pull';
+  public hasMovedByNav = false;
+  public hasZoomedByTwoHand = false;
 
   private pullingHand: 'left' | 'right' | null = null;
   private lastPullPos = new THREE.Vector3();
@@ -26,10 +28,27 @@ export class WorldLocomotion {
   private swoopTargetPos: THREE.Vector3 | null = null;
   private swoopTargetScale: number | null = null;
 
+  private readonly grabAnchorMesh: THREE.Mesh;
+  private readonly twoHandLine: THREE.Line;
+
   constructor(
     public readonly godRig: THREE.Group,
     private readonly terrain: IslandTerrain
   ) {
+    this.grabAnchorMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0x66f0ff, transparent: true, opacity: 0.75 })
+    );
+    this.grabAnchorMesh.visible = false;
+
+    this.twoHandLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: 0xffe488, transparent: true, opacity: 0.85 })
+    );
+    this.twoHandLine.frustumCulled = false;
+    this.twoHandLine.visible = false;
+
+    this.godRig.add(this.grabAnchorMesh, this.twoHandLine);
     this.resetView();
   }
 
@@ -78,11 +97,16 @@ export class WorldLocomotion {
     // 2. Two-hand diorama scale (zoom) + twist rotation!
     if (leftFreeGrab && rightFreeGrab) {
       this.pullingHand = null;
+      this.grabAnchorMesh.visible = false;
       this.glideVelocity.set(0, 0, 0);
       const lLocal = left.palmLocalPos;
       const rLocal = right.palmLocalPos;
       const dist = Math.max(0.08, lLocal.distanceTo(rLocal));
       const angle = Math.atan2(rLocal.z - lLocal.z, rLocal.x - lLocal.x);
+
+      this.twoHandLine.geometry.dispose();
+      this.twoHandLine.geometry = new THREE.BufferGeometry().setFromPoints([lLocal, rLocal]);
+      this.twoHandLine.visible = true;
 
       if (!this.twoHandActive) {
         this.twoHandActive = true;
@@ -92,6 +116,9 @@ export class WorldLocomotion {
       } else {
         const ratio = this.initialTwoHandDist / dist;
         const nextScale = THREE.MathUtils.clamp(this.initialRigScale * ratio, 2.0, 24.0);
+        if (Math.abs(nextScale - this.initialRigScale) > 0.6) {
+          this.hasZoomedByTwoHand = true;
+        }
         this.godRig.scale.setScalar(nextScale);
 
         // Smooth yaw twist rotation
@@ -105,16 +132,21 @@ export class WorldLocomotion {
     }
 
     this.twoHandActive = false;
+    this.twoHandLine.visible = false;
 
     // 3. Point-Glide navigation mode (fly smoothly in the direction your free hand points)
     if (this.navMode === 'point-glide') {
       const activeHand = leftFreeGrab ? left : rightFreeGrab ? right : null;
       if (activeHand) {
+        this.grabAnchorMesh.position.copy(activeHand.palmLocalPos);
+        this.grabAnchorMesh.visible = true;
+        this.hasMovedByNav = true;
         const flySpeed = Math.max(12, this.godRig.scale.x * 2.4);
         const dir = activeHand.aimDirectionWorld.clone();
         dir.y *= 0.45; // Gentle vertical glide
         this.glideVelocity.lerp(dir.multiplyScalar(flySpeed), Math.min(1, dt * 6));
       } else {
+        this.grabAnchorMesh.visible = false;
         this.glideVelocity.multiplyScalar(Math.exp(-4.5 * dt));
       }
       this.godRig.position.addScaledVector(this.glideVelocity, dt);
@@ -126,6 +158,7 @@ export class WorldLocomotion {
     const activeHand = leftFreeGrab ? left : rightFreeGrab ? right : null;
     if (!activeHand) {
       this.pullingHand = null;
+      this.grabAnchorMesh.visible = false;
       if (this.glideVelocity.lengthSq() > 0.02) {
         this.godRig.position.addScaledVector(this.glideVelocity, dt);
         this.glideVelocity.multiplyScalar(Math.exp(-3.8 * dt));
@@ -135,6 +168,9 @@ export class WorldLocomotion {
     }
 
     const localPos = activeHand.palmLocalPos;
+    this.grabAnchorMesh.position.copy(localPos);
+    this.grabAnchorMesh.visible = true;
+
     if (this.pullingHand !== activeHand.handedness) {
       this.pullingHand = activeHand.handedness;
       this.lastPullPos.copy(localPos);
@@ -143,6 +179,9 @@ export class WorldLocomotion {
     }
 
     const deltaLocal = localPos.clone().sub(this.lastPullPos);
+    if (deltaLocal.length() > 0.008) {
+      this.hasMovedByNav = true;
+    }
     // Rotate local delta by rig yaw so pulling always matches your facing direction
     deltaLocal.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.godRig.rotation.y);
     const deltaWorld = deltaLocal.multiplyScalar(this.godRig.scale.x * 1.25);

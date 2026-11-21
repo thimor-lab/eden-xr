@@ -18,6 +18,7 @@ import { DesktopSimulator } from './xr/DesktopSimulator';
 import { GestureRecognizer } from './xr/GestureRecognizer';
 import { HandState, HandTracker } from './xr/HandTracker';
 import { InteractionFeedback } from './xr/InteractionFeedback';
+import { VRTutorialPanel } from './xr/VRTutorialPanel';
 import { VRWristMenu, WristMenuAction } from './xr/VRWristMenu';
 import { WorldLocomotion } from './xr/WorldLocomotion';
 import { XRSessionManager } from './xr/XRSessionManager';
@@ -119,6 +120,8 @@ async function bootstrap(): Promise<void> {
   const gestureRecognizer = new GestureRecognizer(scene);
   const feedback = new InteractionFeedback(scene, terrain);
   const wristMenu = new VRWristMenu(godRig);
+  const tutorialPanel = new VRTutorialPanel(godRig);
+  const tutorialProgress = { moved: false, zoomed: false, openedMenu: false, interacted: false };
   const terrainRaycaster = new THREE.Raycaster();
 
   function raycastTerrainWorld(origin: THREE.Vector3, dir: THREE.Vector3): THREE.Vector3 | null {
@@ -150,6 +153,7 @@ async function bootstrap(): Promise<void> {
   }
 
   function handlePropGrabbed(prop: PhysicsProp, justUprooted: boolean): void {
+    tutorialProgress.interacted = true;
     if (justUprooted) {
       feedback.spawnUprootBurst(prop.mesh.position);
       audio.playUproot(prop.mesh.position);
@@ -215,10 +219,13 @@ async function bootstrap(): Promise<void> {
       camera.position.set(0, 0, 0);
       camera.rotation.set(0, 0, 0);
       locomotion.resetView();
+      tutorialPanel.resetForVRSession();
     } else {
       godRig.position.set(0, 0, 0);
       godRig.rotation.set(0, 0, 0);
       godRig.scale.setScalar(1);
+      tutorialPanel.group.visible = false;
+      wristMenu.group.visible = false;
     }
   });
 
@@ -526,20 +533,55 @@ async function bootstrap(): Promise<void> {
     alignment.samplePalette(palette);
 
     // XR Hand Tracking & God Locomotion
-    const headLocalPos = xrManager.inVR ? camera.position : undefined;
-    handTracker.update(renderer, frame, dt, palette, headLocalPos);
+    // Compute TRUE XR headset pose in godRig-local space (camera.position stays 0,0,0 in WebXR!)
+    let headLocalPos: THREE.Vector3 | undefined;
+    const headForwardLocal = new THREE.Vector3(0, 0, -1);
     if (xrManager.inVR) {
+      const xrCam = renderer.xr.getCamera();
+      const headWorld = new THREE.Vector3();
+      xrCam.getWorldPosition(headWorld);
+      headLocalPos = godRig.worldToLocal(headWorld.clone());
+
+      const worldFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+      const rigInvQuat = godRig.quaternion.clone().invert();
+      headForwardLocal.copy(worldFwd).applyQuaternion(rigInvQuat).normalize();
+    }
+
+    handTracker.update(renderer, frame, dt, palette, headLocalPos);
+    if (xrManager.inVR && headLocalPos) {
       feedback.updateDesktopCursor(desktopSim.cursorWorldPos, false, elapsedSec, palette);
       feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+
+      tutorialProgress.moved = tutorialProgress.moved || locomotion.hasMovedByNav;
+      tutorialProgress.zoomed = tutorialProgress.zoomed || locomotion.hasZoomedByTwoHand;
+      tutorialProgress.openedMenu = tutorialProgress.openedMenu || wristMenu.isOpen;
+
+      const pokingTutorial = tutorialPanel.update(
+        headLocalPos,
+        headForwardLocal,
+        handTracker.right,
+        handTracker.left,
+        tutorialProgress,
+        locomotion.navMode,
+        dt,
+        () => {
+          wristMenu.togglePinned(headLocalPos!, headForwardLocal);
+        }
+      );
+
       const pokingMenu = wristMenu.update(
         handTracker.left,
         handTracker.right,
-        camera.position,
+        headLocalPos,
         dt,
-        handleWristMenuAction
+        (action) => {
+          tutorialProgress.interacted = true;
+          handleWristMenuAction(action);
+        }
       );
-      const leftBusy = wristMenu.isOpen || processVRHand(handTracker.left);
-      const rightBusy = pokingMenu || processVRHand(handTracker.right);
+
+      const leftBusy = (wristMenu.isOpen && !wristMenu.pinned) || pokingTutorial || processVRHand(handTracker.left);
+      const rightBusy = pokingMenu || pokingTutorial || processVRHand(handTracker.right);
       locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy, dt);
     } else {
       desktopSim.update(dt, false);
