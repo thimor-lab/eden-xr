@@ -5,6 +5,7 @@ import { GodHandMesh } from './GodHandMesh';
 export interface HandState {
   handedness: 'left' | 'right';
   tracked: boolean;
+  jointCount: number;
   palmLocalPos: THREE.Vector3;
   indexTipLocalPos: THREE.Vector3;
   palmWorldPos: THREE.Vector3;
@@ -12,6 +13,7 @@ export interface HandState {
   indexTipWorldPos: THREE.Vector3;
   aimDirectionWorld: THREE.Vector3;
   palmNormalLocal: THREE.Vector3;
+  palmDotHead: number;
   isPalmFacingCamera: boolean;
   velocityWorld: THREE.Vector3;
   peakVelocityWorld: THREE.Vector3;
@@ -74,6 +76,7 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
   return {
     handedness,
     tracked: false,
+    jointCount: 0,
     palmLocalPos: new THREE.Vector3(),
     indexTipLocalPos: new THREE.Vector3(),
     palmWorldPos: new THREE.Vector3(),
@@ -81,6 +84,7 @@ function createEmptyHand(handedness: 'left' | 'right'): HandState {
     indexTipWorldPos: new THREE.Vector3(),
     aimDirectionWorld: new THREE.Vector3(0, -1, 0),
     palmNormalLocal: new THREE.Vector3(0, 1, 0),
+    palmDotHead: 0,
     isPalmFacingCamera: false,
     velocityWorld: new THREE.Vector3(),
     peakVelocityWorld: new THREE.Vector3(),
@@ -173,6 +177,8 @@ export class HandTracker {
     state.wasGrabbing = state.isGrabbing;
     state.wasPointing = state.isPointing;
     state.tracked = false;
+    state.jointCount = 0;
+    state.palmDotHead = 0;
     state.isPinching = false;
     state.isGrabbing = false;
     state.isPointing = false;
@@ -217,6 +223,7 @@ export class HandTracker {
     if (!palmLocal || !thumbTip || !indexTip) return;
 
     state.tracked = true;
+    state.jointCount = localJoints.length;
     state.palmLocalPos.copy(palmLocal);
     state.indexTipLocalPos.copy(indexTip);
     const pinchLocal = thumbTip.clone().lerp(indexTip, 0.5);
@@ -236,7 +243,8 @@ export class HandTracker {
 
     if (headLocalPos) {
       const toHead = headLocalPos.clone().sub(palmLocal).normalize();
-      state.isPalmFacingCamera = state.palmNormalLocal.dot(toHead) > 0.25;
+      state.palmDotHead = state.palmNormalLocal.dot(toHead);
+      state.isPalmFacingCamera = state.palmDotHead > 0.25;
     }
 
     // Transform from rig-local XR space into scaled world space

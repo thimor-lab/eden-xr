@@ -36,6 +36,7 @@ describe('VR Wrist Menu & Locomotion', () => {
     const dummyHand = {
       handedness: 'left' as const,
       tracked: false,
+      jointCount: 0,
       palmLocalPos: new THREE.Vector3(),
       indexTipLocalPos: new THREE.Vector3(),
       palmWorldPos: new THREE.Vector3(),
@@ -43,6 +44,7 @@ describe('VR Wrist Menu & Locomotion', () => {
       indexTipWorldPos: new THREE.Vector3(),
       aimDirectionWorld: new THREE.Vector3(0, -1, 0),
       palmNormalLocal: new THREE.Vector3(0, 1, 0),
+      palmDotHead: 0,
       isPalmFacingCamera: false,
       velocityWorld: new THREE.Vector3(),
       peakVelocityWorld: new THREE.Vector3(),

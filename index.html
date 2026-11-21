@@ -183,7 +183,20 @@
         <button id="enter-vr-btn" class="xr-btn">Enter VR (Android XR)</button>
         <button id="toggle-audio-btn" class="secondary-btn">Audio: Off (Click to Enable)</button>
         <button id="reset-world-btn" class="secondary-btn">Reset Island</button>
+        <button id="open-logs-btn" class="secondary-btn">QA Logs (0 err)</button>
       </div>
+    </div>
+    <div id="logs-modal" style="display:none; position:fixed; inset:20px; z-index:40; background:rgba(8,14,22,0.96); border:1px solid rgba(255,224,150,0.45); border-radius:14px; padding:16px; flex-direction:column; gap:10px; pointer-events:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <strong id="logs-summary" style="color:#ffd98a; font-size:0.95rem;">Session QA Logs</strong>
+        <div style="display:flex; gap:8px;">
+          <button id="copy-logs-btn" class="secondary-btn">Copy JSON</button>
+          <button id="download-logs-btn" class="secondary-btn">Download .json</button>
+          <button id="clear-logs-btn" class="secondary-btn">Clear</button>
+          <button id="close-logs-btn" class="secondary-btn">Close</button>
+        </div>
+      </div>
+      <textarea id="logs-text" readonly style="flex:1; width:100%; background:#060b12; color:#cfe3f5; border:1px solid rgba(255,255,255,0.16); border-radius:8px; padding:10px; font-family:monospace; font-size:0.76rem; resize:none;"></textarea>
     </div>
     <div id="toast"></div>
     <script type="module" src="/src/main.ts"></script>

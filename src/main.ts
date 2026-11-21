@@ -3,6 +3,7 @@ import { SpatialAudio } from './audio/SpatialAudio';
 import { AlignmentSystem } from './core/AlignmentSystem';
 import { EventBus } from './core/EventBus';
 import { GameState } from './core/GameState';
+import { SessionLogger } from './core/SessionLogger';
 import { CreatureController } from './creature/CreatureController';
 import { MiracleEffects } from './miracles/MiracleEffects';
 import { MiracleManager } from './miracles/MiracleManager';
@@ -28,6 +29,14 @@ async function bootstrap(): Promise<void> {
   const enterVrBtn = document.getElementById('enter-vr-btn') as HTMLButtonElement;
   const toggleAudioBtn = document.getElementById('toggle-audio-btn') as HTMLButtonElement;
   const resetWorldBtn = document.getElementById('reset-world-btn') as HTMLButtonElement;
+  const openLogsBtn = document.getElementById('open-logs-btn') as HTMLButtonElement;
+  const logsModal = document.getElementById('logs-modal')!;
+  const logsSummaryEl = document.getElementById('logs-summary')!;
+  const logsTextEl = document.getElementById('logs-text') as HTMLTextAreaElement;
+  const copyLogsBtn = document.getElementById('copy-logs-btn') as HTMLButtonElement;
+  const downloadLogsBtn = document.getElementById('download-logs-btn') as HTMLButtonElement;
+  const clearLogsBtn = document.getElementById('clear-logs-btn') as HTMLButtonElement;
+  const closeLogsBtn = document.getElementById('close-logs-btn') as HTMLButtonElement;
   const overlayEl = document.getElementById('overlay')!;
   const toastEl = document.getElementById('toast')!;
 
@@ -57,6 +66,10 @@ async function bootstrap(): Promise<void> {
   scene.add(godRig);
 
   // Core systems
+  const logger = new SessionLogger(500);
+  logger.installGlobalErrorHooks();
+  logger.info('app', 'EdenXR bootstrap start');
+
   const bus = new EventBus();
   const alignment = new AlignmentSystem(bus);
   const gameState = new GameState(bus);
@@ -216,11 +229,16 @@ async function bootstrap(): Promise<void> {
   const xrManager = new XRSessionManager(renderer, enterVrBtn, (inVR) => {
     overlayEl.style.display = inVR ? 'none' : 'flex';
     if (inVR) {
+      logger.vrEntered = true;
+      const session = renderer.xr.getSession();
+      const features = (session as unknown as { enabledFeatures?: string[] })?.enabledFeatures ?? [];
+      logger.event('xr', 'VR session started', { enabledFeatures: features });
       camera.position.set(0, 0, 0);
       camera.rotation.set(0, 0, 0);
       locomotion.resetView();
       tutorialPanel.resetForVRSession();
     } else {
+      logger.event('xr', 'VR session ended');
       godRig.position.set(0, 0, 0);
       godRig.rotation.set(0, 0, 0);
       godRig.scale.setScalar(1);
@@ -318,7 +336,46 @@ async function bootstrap(): Promise<void> {
     if (xrManager.inVR) {
       locomotion.resetView();
     }
+    logger.event('world', 'Reset island');
     bus.emit('toast:show', { message: 'Island of Eden reset!', durationMs: 1800 });
+  });
+
+  // QA Logs Modal Controls
+  function refreshLogsModal(): void {
+    const exp = logger.exportObject();
+    logsSummaryEl.textContent = `QA Logs · Entries: ${exp.summary.totalEntries} · Errors: ${exp.summary.errorCount} · Max Joints L:${exp.summary.maxLeftJoints} R:${exp.summary.maxRightJoints}`;
+    logsTextEl.value = logger.toJSON(true);
+  }
+
+  openLogsBtn.addEventListener('click', () => {
+    refreshLogsModal();
+    logsModal.style.display = 'flex';
+  });
+  closeLogsBtn.addEventListener('click', () => {
+    logsModal.style.display = 'none';
+  });
+  clearLogsBtn.addEventListener('click', () => {
+    logger.clear();
+    refreshLogsModal();
+  });
+  copyLogsBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(logger.toJSON(true));
+      bus.emit('toast:show', { message: 'QA Log JSON copied to clipboard!', durationMs: 1800 });
+    } catch {
+      logsTextEl.select();
+      document.execCommand('copy');
+      bus.emit('toast:show', { message: 'QA Log selected & copied!', durationMs: 1800 });
+    }
+  });
+  downloadLogsBtn.addEventListener('click', () => {
+    const blob = new Blob([logger.toJSON(true)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `eden-xr-qa-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   });
 
   window.addEventListener('resize', () => {
@@ -523,6 +580,8 @@ async function bootstrap(): Promise<void> {
 
   // Main Animation Loop (WebXR compatible)
   let lastTimeMs = performance.now();
+  let telemetryAccum = 0;
+  let lastInputSig = '';
   const palette = alignment.samplePalette();
 
   renderer.setAnimationLoop((timeMs: number, frame?: XRFrame) => {
@@ -533,74 +592,132 @@ async function bootstrap(): Promise<void> {
     alignment.samplePalette(palette);
 
     // XR Hand Tracking & God Locomotion
-    // Compute TRUE XR headset pose in godRig-local space (camera.position stays 0,0,0 in WebXR!)
+    // Use native WebXR frame.getViewerPose(refSpace) for exact headset pose in godRig-local space!
     let headLocalPos: THREE.Vector3 | undefined;
     const headForwardLocal = new THREE.Vector3(0, 0, -1);
-    if (xrManager.inVR) {
-      const xrCam = renderer.xr.getCamera();
-      const headWorld = new THREE.Vector3();
-      xrCam.getWorldPosition(headWorld);
-      headLocalPos = godRig.worldToLocal(headWorld.clone());
 
-      const worldFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
-      const rigInvQuat = godRig.quaternion.clone().invert();
-      headForwardLocal.copy(worldFwd).applyQuaternion(rigInvQuat).normalize();
-    }
+    try {
+      const session = renderer.xr.getSession();
+      const refSpace = renderer.xr.getReferenceSpace();
 
-    handTracker.update(renderer, frame, dt, palette, headLocalPos);
-    if (xrManager.inVR && headLocalPos) {
-      feedback.updateDesktopCursor(desktopSim.cursorWorldPos, false, elapsedSec, palette);
-      feedback.setHover('desktop', null, 1, 'none', elapsedSec);
-
-      tutorialProgress.moved = tutorialProgress.moved || locomotion.hasMovedByNav;
-      tutorialProgress.zoomed = tutorialProgress.zoomed || locomotion.hasZoomedByTwoHand;
-      tutorialProgress.openedMenu = tutorialProgress.openedMenu || wristMenu.isOpen;
-
-      const pokingTutorial = tutorialPanel.update(
-        headLocalPos,
-        headForwardLocal,
-        handTracker.right,
-        handTracker.left,
-        tutorialProgress,
-        locomotion.navMode,
-        dt,
-        () => {
-          wristMenu.togglePinned(headLocalPos!, headForwardLocal);
+      if (xrManager.inVR && session && frame && refSpace) {
+        // Log inputSources whenever devices/hands connect or change
+        const sourcesInfo = Array.from(session.inputSources).map((s) => ({
+          hand: s.handedness,
+          hasHand: Boolean(s.hand),
+          hasGrip: Boolean(s.gripSpace),
+          profiles: s.profiles,
+        }));
+        const sig = JSON.stringify(sourcesInfo);
+        if (sig !== lastInputSig) {
+          lastInputSig = sig;
+          logger.event('xr.inputs', 'Input sources changed', { sources: sourcesInfo });
         }
-      );
 
-      const pokingMenu = wristMenu.update(
-        handTracker.left,
-        handTracker.right,
-        headLocalPos,
-        dt,
-        (action) => {
-          tutorialProgress.interacted = true;
-          handleWristMenuAction(action);
-        }
-      );
-
-      const leftBusy = (wristMenu.isOpen && !wristMenu.pinned) || pokingTutorial || processVRHand(handTracker.left);
-      const rightBusy = pokingMenu || pokingTutorial || processVRHand(handTracker.right);
-      locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy, dt);
-    } else {
-      desktopSim.update(dt, false);
-      feedback.updateDesktopCursor(desktopSim.cursorWorldPos, true, elapsedSec, palette);
-      const heldDesktop = desktopSim.getHeldProp();
-      if (heldDesktop) {
-        feedback.setHover('desktop', null, 1, 'none', elapsedSec);
-        const previewVel = adjustReleaseVelocity(heldDesktop, desktopSim.getThrowVelocity());
-        feedback.setThrowArc(heldDesktop.mesh.position, previewVel);
-      } else {
-        feedback.setThrowArc(null, null);
-        const hover = physics.findNearestGrabbable(desktopSim.cursorWorldPos, 3.2);
-        if (hover) {
-          const allowed = influenceRing.isInside(hover.mesh.position);
-          feedback.setHover('desktop', hover.mesh.position, hover.radius, allowed ? 'prop' : 'blocked', elapsedSec);
-        } else {
-          feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+        const viewerPose = frame.getViewerPose(refSpace);
+        if (viewerPose) {
+          const p = viewerPose.transform.position;
+          const o = viewerPose.transform.orientation;
+          headLocalPos = new THREE.Vector3(p.x, p.y, p.z);
+          const q = new THREE.Quaternion(o.x, o.y, o.z, o.w);
+          headForwardLocal.set(0, 0, -1).applyQuaternion(q).normalize();
         }
       }
+
+      handTracker.update(renderer, frame, dt, palette, headLocalPos);
+      logger.recordHandCounts(handTracker.left.jointCount, handTracker.right.jointCount);
+
+      if (xrManager.inVR) {
+        feedback.updateDesktopCursor(desktopSim.cursorWorldPos, false, elapsedSec, palette);
+        feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+
+        const headPos = headLocalPos ?? new THREE.Vector3(0, 1.5, 0);
+        tutorialProgress.moved = tutorialProgress.moved || locomotion.hasMovedByNav;
+        tutorialProgress.zoomed = tutorialProgress.zoomed || locomotion.hasZoomedByTwoHand;
+        tutorialProgress.openedMenu = tutorialProgress.openedMenu || wristMenu.isOpen;
+
+        const pokingTutorial = tutorialPanel.update(
+          headPos,
+          headForwardLocal,
+          handTracker.right,
+          handTracker.left,
+          tutorialProgress,
+          locomotion.navMode,
+          dt,
+          () => {
+            const pinned = wristMenu.togglePinned(headPos, headForwardLocal);
+            logger.event('ui.menu', pinned ? 'Pinned menu' : 'Unpinned menu');
+          }
+        );
+
+        const pokingMenu = wristMenu.update(
+          handTracker.left,
+          handTracker.right,
+          headPos,
+          dt,
+          (action) => {
+            tutorialProgress.interacted = true;
+            logger.event('ui.menu', `Poked ${action}`);
+            handleWristMenuAction(action);
+          }
+        );
+
+        const leftBusy = (wristMenu.isOpen && !wristMenu.pinned) || pokingTutorial || processVRHand(handTracker.left);
+        const rightBusy = pokingMenu || pokingTutorial || processVRHand(handTracker.right);
+        locomotion.update(handTracker.left, handTracker.right, leftBusy, rightBusy, dt);
+
+        // 1Hz QA telemetry snapshot while in VR
+        telemetryAccum += dt;
+        if (telemetryAccum >= 1.0) {
+          telemetryAccum = 0;
+          logger.telemetry('vr', {
+            head: [Number(headPos.x.toFixed(2)), Number(headPos.y.toFixed(2)), Number(headPos.z.toFixed(2))],
+            rig: [
+              Number(godRig.position.x.toFixed(1)),
+              Number(godRig.position.y.toFixed(1)),
+              Number(godRig.position.z.toFixed(1)),
+            ],
+            scale: Number(godRig.scale.x.toFixed(2)),
+            nav: locomotion.navMode,
+            menu: { open: wristMenu.isOpen, pinned: wristMenu.pinned, armed: wristMenu.armedAction },
+            L: {
+              tr: handTracker.left.tracked,
+              j: handTracker.left.jointCount,
+              dot: Number(handTracker.left.palmDotHead.toFixed(2)),
+              up: handTracker.left.isPalmFacingCamera,
+              pinch: handTracker.left.isPinching,
+              grab: handTracker.left.isGrabbing,
+            },
+            R: {
+              tr: handTracker.right.tracked,
+              j: handTracker.right.jointCount,
+              pinch: handTracker.right.isPinching,
+              grab: handTracker.right.isGrabbing,
+              point: handTracker.right.isPointing,
+            },
+          });
+        }
+      } else {
+        desktopSim.update(dt, false);
+        feedback.updateDesktopCursor(desktopSim.cursorWorldPos, true, elapsedSec, palette);
+        const heldDesktop = desktopSim.getHeldProp();
+        if (heldDesktop) {
+          feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+          const previewVel = adjustReleaseVelocity(heldDesktop, desktopSim.getThrowVelocity());
+          feedback.setThrowArc(heldDesktop.mesh.position, previewVel);
+        } else {
+          feedback.setThrowArc(null, null);
+          const hover = physics.findNearestGrabbable(desktopSim.cursorWorldPos, 3.2);
+          if (hover) {
+            const allowed = influenceRing.isInside(hover.mesh.position);
+            feedback.setHover('desktop', hover.mesh.position, hover.radius, allowed ? 'prop' : 'blocked', elapsedSec);
+          } else {
+            feedback.setHover('desktop', null, 1, 'none', elapsedSec);
+          }
+        }
+      }
+    } catch (err) {
+      logger.error('xr.loop', err);
     }
 
     // Simulation step
@@ -639,6 +756,7 @@ async function bootstrap(): Promise<void> {
         ? `Converted (${gameState.victoryMethod})!`
         : `Unconverted (${Math.round(gameState.rivalConversion)}%)`;
       creatureValEl.textContent = creature.brain.moodLabel;
+      openLogsBtn.textContent = `QA Logs (${logger.errorCount} err · ${logger.getEntries().length})`;
     }
 
     renderer.render(scene, camera);
