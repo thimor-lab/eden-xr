@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>EdenXR — Hand of the Gods</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0b1420;
+        font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        color: #f4efe6;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 20px;
+        z-index: 10;
+      }
+      #top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      .hud-card {
+        background: rgba(12, 18, 28, 0.72);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 224, 150, 0.28);
+        border-radius: 12px;
+        padding: 12px 16px;
+        max-width: 340px;
+        pointer-events: auto;
+      }
+      .hud-card h1 {
+        font-size: 1.15rem;
+        letter-spacing: 0.08em;
+        color: #ffd98a;
+        margin-bottom: 4px;
+      }
+      .hud-card p {
+        font-size: 0.82rem;
+        line-height: 1.4;
+        color: #d6dde6;
+      }
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.82rem;
+        margin-top: 6px;
+      }
+      .bar-bg {
+        height: 6px;
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 99px;
+        overflow: hidden;
+        margin-top: 3px;
+      }
+      .bar-fill {
+        height: 100%;
+        transition: width 0.2s ease, background 0.3s ease;
+      }
+      #bottom-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        pointer-events: auto;
+      }
+      button.xr-btn {
+        background: linear-gradient(135deg, #f3c15b, #d4892a);
+        color: #14100a;
+        font-weight: 700;
+        font-size: 1rem;
+        letter-spacing: 0.04em;
+        border: none;
+        border-radius: 999px;
+        padding: 13px 26px;
+        cursor: pointer;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        transition: transform 0.15s ease, filter 0.15s ease;
+      }
+      button.xr-btn:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.08);
+      }
+      button.xr-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      button.secondary-btn {
+        background: rgba(18, 28, 42, 0.82);
+        color: #f4efe6;
+        border: 1px solid rgba(255, 224, 150, 0.35);
+        border-radius: 999px;
+        padding: 10px 18px;
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      #toast {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(12, 18, 28, 0.86);
+        border: 1px solid rgba(255, 224, 150, 0.45);
+        border-radius: 14px;
+        padding: 12px 22px;
+        font-size: 1rem;
+        color: #ffe3a3;
+        opacity: 0;
+        transition: opacity 0.25s ease;
+        pointer-events: none;
+        z-index: 20;
+        text-align: center;
+      }
+      #toast.visible {
+        opacity: 1;
+      }
+      #help-panel {
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+      #help-panel kbd {
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-family: monospace;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-9o1D0im2.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="overlay">
+      <div id="top-bar">
+        <div class="hud-card" id="status-card">
+          <h1>EDEN XR</h1>
+          <p id="alignment-label">Alignment: Neutral Deity</p>
+          <div class="bar-bg"><div class="bar-fill" id="alignment-bar" style="width: 50%; background: #d4b872;"></div></div>
+          <div class="stat-row"><span>Prayer Power</span><span id="mana-val">60 / 100</span></div>
+          <div class="bar-bg"><div class="bar-fill" id="mana-bar" style="width: 60%; background: #5cd6ff;"></div></div>
+          <div class="stat-row"><span>Your Belief</span><span id="belief-val">120</span></div>
+          <div class="stat-row"><span>Granary</span><span id="granary-val">Food 45 · Wood 40</span></div>
+          <div class="stat-row"><span>Rival Village</span><span id="rival-val">Unconverted (0%)</span></div>
+          <div class="stat-row"><span>Creature Mood</span><span id="creature-val">Curious · Neutral</span></div>
+        </div>
+        <div class="hud-card" id="help-panel">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <h1 style="margin:0;">GOD CONTROLS</h1>
+            <button id="toggle-help-btn" class="secondary-btn" style="padding:3px 10px; font-size:0.72rem;">Hide</button>
+          </div>
+          <div id="help-body" style="margin-top:6px;">
+          <p><strong>Android XR Hands:</strong><br />
+            • <b>Turn Left Palm Up</b> → 3D Grimoire Menu (Miracles, Leash, Swoop Go!)<br />
+            • <b>1-Hand FIST & Pull</b> → Move horizontally · <b>2 FISTS</b> → Zoom & Turntable Rotate<br />
+            • <b>PINCH</b> (thumb+index) → Grab rocks/trees/Totem/Leash or cast armed Miracles<br />
+            • <b>Index Point + Draw</b> → O Food, Δ Wood, ~ Rain, @ Fireball, Z Lightning<br />
+            • <b>Pet</b> (gentle palm) or <b>Slap</b> (fast palm) Creature
+          </p>
+          <p style="margin-top: 6px;"><strong>Desktop / Laptop:</strong><br />
+            <kbd>Left-Drag Ground</kbd> or 2-Finger Trackpad Pan · <kbd>Shift+Drag</kbd>/<kbd>Right-Drag</kbd>/<kbd>Q E</kbd> Orbit<br />
+            <kbd>WASD</kbd> Move · <kbd>Scroll</kbd>/Pinch Zoom · <kbd>H</kbd> Home · <kbd>R</kbd> Rival · <kbd>C</kbd> Creature<br />
+            <kbd>L</kbd> Tie Leash · <kbd>U</kbd> Unleash · <kbd>P</kbd> Pet · <kbd>X</kbd> Slap · <kbd>T</kbd> Totem<br />
+            <kbd>1–5</kbd> Miracles · <kbd>G</kbd>+Drag Gesture
+          </p>
+          </div>
+        </div>
+      </div>
+      <div id="bottom-controls">
+        <button id="enter-vr-btn" class="xr-btn">Enter VR (Android XR)</button>
+        <button id="toggle-audio-btn" class="secondary-btn">Audio: Off (Click to Enable)</button>
+        <button id="reset-world-btn" class="secondary-btn">Reset Island</button>
+        <button id="open-logs-btn" class="secondary-btn">QA Logs (0 err)</button>
+      </div>
+    </div>
+    <div id="logs-modal" style="display:none; position:fixed; inset:20px; z-index:40; background:rgba(8,14,22,0.96); border:1px solid rgba(255,224,150,0.45); border-radius:14px; padding:16px; flex-direction:column; gap:10px; pointer-events:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <strong id="logs-summary" style="color:#ffd98a; font-size:0.95rem;">Session QA Logs</strong>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="copy-logs-btn" class="secondary-btn">Copy JSON</button>
+          <button id="download-logs-btn" class="secondary-btn">Download .json</button>
+          <button id="github-issue-btn" class="secondary-btn">Submit GitHub QA Issue</button>
+          <button id="clear-logs-btn" class="secondary-btn">Clear</button>
+          <button id="close-logs-btn" class="secondary-btn">Close</button>
+        </div>
+      </div>
+      <textarea id="logs-text" readonly style="flex:1; width:100%; background:#060b12; color:#cfe3f5; border:1px solid rgba(255,255,255,0.16); border-radius:8px; padding:10px; font-family:monospace; font-size:0.76rem; resize:none;"></textarea>
+    </div>
+    <div id="toast"></div>
+  </body>
+</html>
